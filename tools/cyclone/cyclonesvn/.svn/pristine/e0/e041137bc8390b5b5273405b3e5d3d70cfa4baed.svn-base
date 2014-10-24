@@ -1,0 +1,377 @@
+// This is the parser.  It reads each character, and does something with it 
+// based on the current parsing context.  It will do some compression while 
+// it reads stuff in. 
+#include <core.h>
+#include <stdio.h>
+#include <string.h>
+#include <list.h>
+#include "parser.h"
+using Core;
+using List;
+using Buffer;
+
+namespace Parser;
+
+// The information part of a tag 
+static string_t tag_strings[] = {
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  "B", "EM", "I", "PL", "S", "TT", "U", "r", "g",
+  "b", "c", "m", "y", "k", "w"
+};
+
+static int position = 1;
+#define GETC(f) (position++, fgetc(f))
+#define UNGETC(c,f) (position--, ungetc(c,f))
+
+static void die(const char ?`r desc, ... inject parg_t<`r4> ap) 
+  __attribute__((format(printf,1,2)))
+{
+  fprintf(stderr,"char %d: ",position);
+  vfprintf(stderr,desc,ap);
+  exit(1);
+}
+
+static bool was_space = false;
+static context_t space_ctxt = Context(0,0,0,0,0,0,DONT_KNOW, DONT_KNOW);
+inline bool eq_space_context(context_t t1, context_t t2){
+  return (t1.size==t2.size)&&(t1.U==t2.U)&&(t1.U?(t1.color==t2.color):true);
+}
+/* keep going until you hit a tag or EOF 
+ * and then return the text you've got so far.
+   XXX should be able to region-ify this */
+static doc_t get_text(context_t ctxt, buf_t b, FILE @f) {
+  int c;
+  bool in_tt = ctxt.TT;
+  unsigned int start = Buffer::position(b);
+  bool only_space = true;
+  while (true) {
+    c = GETC(f);
+    switch (c) {
+    case '<': /* tag */
+      UNGETC(c,f);
+      if(start == Buffer::position(b))
+	return Mt;
+      Buffer::add_char(b, '\0');
+      if (only_space) return new Spc(start);
+      return new Text(start);
+    case EOF: /* eof */
+      if(start == Buffer::position(b))
+	return Mt;
+      Buffer::add_char(b, '\0');
+      if (only_space) return new Spc(start);
+      return new Text(start);
+    case 0x20:
+    case 0x0D:
+    case 0x0A:
+    case 0x09:
+      // white space treated specially
+      if (!in_tt) {
+        //only add in space if previous char is not same context space
+        if (!was_space||!eq_space_context(ctxt,space_ctxt)){
+          Buffer::add_char(b,(char)c);
+        }
+        while (true) {
+          c = GETC(f);
+          if (c == 0x20 || c == 0x0D || c == 0x0A || c == 0x09) continue;
+          break;
+        }
+        UNGETC(c,f);
+        was_space = true;
+        space_ctxt = ctxt;
+      }
+      else{
+          Buffer::add_char(b,(char)c);
+          was_space = false;
+      }
+      break;
+    default:
+      Buffer::add_char(b,(char)c);
+      was_space = false;
+      only_space = false;
+      break;
+    }
+  }
+}
+
+static tag_t get_tag(FILE @f) {
+  // < has already been consumed
+  int c = GETC(f);
+  if (c == EOF) die("EOF within tag");
+  tag_t t;
+  switch (c) {
+  case '0': t = Zero; break;
+  case '1': t = One; break;
+  case '2': t = Two; break;
+  case '3': t = Three; break;
+  case '4': t = Four; break;
+  case '5': t = Five; break;
+  case '6': t = Six; break;
+  case '7': t = Seven; break;
+  case '8': t = Eight; break;
+  case '9': t = Nine; break;
+  case 'B': t = B_tag; break;
+  case 'I': t = I_tag; break;
+  case 'S': t = S_tag; break;
+  case 'U': t = U_tag; break;
+  case 'r': t = r_tag; break;
+  case 'g': t = g_tag; break;
+  case 'b': t = b_tag; break;
+  case 'c': t = c_tag; break;
+  case 'm': t = m_tag; break;
+  case 'y': t = y_tag; break;
+  case 'k': t = k_tag; break;
+  case 'w': t = w_tag; break;
+  case 'E': 
+    if ((c = GETC(f)) != 'M')
+      die("invalid 2-char tag E%c",(char)c);
+    t = EM_tag;
+    break;
+  case 'P':
+    if ((c = GETC(f)) != 'L')
+      die("invalid 2-char tag P%c",(char)c);
+    t = PL_tag;
+    break;
+  case 'T':
+    if ((GETC(f)) != 'T')
+      die("invalid 2-char tag T%c",(char)c);
+    t = TT_tag;
+    break;
+  default:
+    die("invalid tag %c",(char)c); 
+    t = TT_tag; break;
+  }
+  if ((c = GETC(f)) != '>')
+    die("missing > on tag %s",tag_strings[t]);
+  return t;
+}
+
+static void get_endtag(FILE @f, tag_t t) {
+  // < has already been consumed.
+  int c = GETC(f);
+  if (c != '/')
+    die("expecting end tag /");
+  tag_t t2 = get_tag(f);
+  if (t != t2)
+    die("end tag mismatch: %s != %s",tag_strings[t],tag_strings[t2]);
+}
+
+static bool check_redundant(context_t @`r ctxt, tag_t tag) {
+  switch (tag) {
+  case B_tag:
+    if (ctxt->B) return true;
+    ctxt->B = true; 
+    break;
+  case EM_tag:
+    if (ctxt->S) return true;
+    ctxt->EM = !ctxt->EM; 
+    break;
+  case I_tag:
+    if (ctxt->I) return true;
+    ctxt->I = true;
+    break;
+  case PL_tag:
+    // PL clears the U, B, EM, I, S, and TT attributes
+    if (ctxt->U == 0 && !ctxt->B && !ctxt->EM && !ctxt->I && !ctxt->S && 
+	!ctxt->TT)
+      return true;
+    ctxt->U = 0; ctxt->B = false; ctxt->EM = false; ctxt->I = false;
+    ctxt->S = false; ctxt->TT = false;
+    break;
+  case S_tag:
+    if (ctxt->S) return true;
+    ctxt->S = true;
+    ctxt->EM = false; 
+    break;
+  case TT_tag:
+    if (ctxt->TT) return true;
+    ctxt->TT = true;
+    break;
+  case U_tag:
+    if (ctxt->U == 3) return true;
+    ctxt->U++;
+    break;
+  case Zero:
+  case One:
+  case Two:
+  case Three:
+  case Four:
+  case Five:
+  case Six:
+  case Seven:
+  case Eight:
+  case Nine:
+    char sz = (char)tag;
+    if (ctxt->size == sz) return true;
+    ctxt->size = sz;
+    break;
+  case r_tag:
+  case g_tag:
+  case b_tag:
+  case c_tag:
+  case m_tag:
+  case y_tag:
+  case k_tag:
+  case w_tag:
+    char color = (char)tag;
+    if (ctxt->color == color) return true;
+    ctxt->color = color;
+    break;
+  default: throw new Impossible("down_opt");
+  }
+  return false;
+}
+
+/* returns a list of docs in reverse order. */
+static list_t<doc_t> local_get_docs(context_t ctxt, buf_t b, FILE @f) {
+  list_t<doc_t> docs = NULL, ds = NULL;
+  int c = GETC(f);
+  while (true) {
+    if (c == EOF) break;
+    else if (c == '<') {
+      c = GETC(f);
+      UNGETC(c,f);
+      if (c == '/') {
+	break;
+      } else {
+	let tag = get_tag(f);
+	let new_ctxt = ctxt;
+	let redundant = check_redundant(&new_ctxt,tag);
+        let ds = local_get_docs(new_ctxt, b, f);
+	get_endtag(f,tag);
+        doc_t ? result;
+	/* The code below optimizes in two ways:
+	   1) it eliminates redundant tags <x><y><z></z></y></x> etc.
+	   2) it avoids allocating doc_t's, converting to/from arrays, etc.
+	      in favor of concatentating lists */
+	if (!redundant) {
+          if (ds != NULL) {
+            if (ds->tl == NULL) /* length == 1 */ {
+  	      doc_t d = new Tagged(tag,ds->hd);
+              docs = new List(d,docs);
+            }
+            else /* length > 1 */ {
+	      docs = new List(new Tagged(tag,new Seq(imp_rev(ds))), docs);
+            }
+          }
+          /* else do nothing; had <x></x> */
+        }
+        else { /* eliminated the tags, so just append the lists */
+	  docs = imp_append(ds,docs);
+        }
+      }
+    } else {
+      UNGETC(c,f);
+      docs = new List(get_text(ctxt, b,f),docs);
+    }
+    c = GETC(f);
+  }
+  return docs;
+}
+  
+doc_t parse_rec(context_t ctxt, buf_t b, FILE @f) {
+  list_t<doc_t> docs = imp_rev(local_get_docs(ctxt,b,f));
+  if(docs == NULL)
+    return Mt;
+  if(docs->tl == NULL)
+    return docs->hd;
+  else 
+    return new Seq(docs);
+}
+
+/* Parser that keeps state on a list instead of the runtime stack */
+/* NOTE: this one doesn't check whether tags match up */
+static tag_t get_endtag_nocheck(FILE @f) {
+  // < has already been consumed.
+  int c = GETC(f);
+  if (c != '/')
+    die("expecting end tag /");
+  return get_tag(f);
+}
+list_t<doc_t> get_nest(context_t ctxt, buf_t b, FILE @f) {
+  list_t<doc_t,`H> ds = NULL;
+  unsigned int count = 0; /* Invariant: count is length of ds */
+
+  /* Maintain a stack with an elt for each level of nesting.
+     The elt tells how many elts were on ds on entry to the nest,
+     plus whether the tag is redundant. */
+  list_t<$(unsigned int,context_t)@> nest = NULL;
+  int c = GETC(f);
+  //  printf("Starting parse, c = %c\n",c);
+  while (true) {
+    if (c == EOF) break;
+    else if (c == '<') {
+      /* Must be a start or end tag */
+      c = GETC(f);
+      UNGETC(c,f);
+      if (c == '/') {
+        /* end tag */
+        let tag = get_endtag_nocheck(f);
+        let &$(old_count,old_ctxt) = nest->hd;
+        nest = nest->tl;
+        //        printf("Pop %x\n",x);
+        let redundant =
+          (old_ctxt.B == ctxt.B &&
+           old_ctxt.EM == ctxt.EM &&
+           old_ctxt.I == ctxt.I &&
+           old_ctxt.S == ctxt.S &&
+           old_ctxt.TT == ctxt.TT &&
+           old_ctxt.U == ctxt.U &&
+           old_ctxt.size == ctxt.size &&
+           old_ctxt.color == ctxt.color);
+        ctxt = old_ctxt;
+        if (!redundant) {
+          //          printf("Not redundant\n");
+          let howmany = count - old_count;
+          if (howmany == 1) {
+            //            printf("Picking up 1 doc\n");
+            doc_t d = new Tagged(tag,ds->hd);
+            ds->hd = d;
+          }
+          else if (howmany > 1) {
+            //            printf("Picking up %d docs\n",howmany);
+            //            printf("Num avail: %d\n",List::length(ds));
+            //            printf("Count: %d\n",count);
+            let docs = NULL;
+            for (; howmany>0; howmany--) {
+              //              printf("tick");
+              docs = new List(ds->hd,docs);
+              ds = ds->tl;
+              count--;
+            }
+            //            printf("Done w/dem docs\n");
+            let d = new Tagged(tag,new Seq(docs));
+            ds = new List(d,ds);
+            count++;
+          }
+        }
+      }
+      else  {
+        /* start tag */
+	let tag = get_tag(f);
+        let old_ctxt = ctxt;
+	let redundant = check_redundant(&ctxt,tag); // side-effect
+        //        printf("Push %x (tag=%d)\n",x,tag);
+        nest = new List(new $(count,old_ctxt),nest);
+      }
+    }
+    else {
+      /* Not a start or end tag, so grab a bunch of text */
+      //      printf("Getting text\n");
+      UNGETC(c,f);
+      ds = new List(get_text(ctxt,b,f),ds);
+      count++;
+    }
+    c = GETC(f);
+  } /* end of while loop */
+  return ds;
+}
+
+doc_t parse_iter(context_t ctxt, buf_t b, FILE @f) {
+  list_t<doc_t> docs = imp_rev(get_nest(ctxt,b,f));
+  if(docs == NULL)
+    return Mt;
+  if(docs->tl == NULL)
+    return docs->hd;
+  else 
+    return new Seq(docs);
+}

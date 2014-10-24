@@ -1,0 +1,599 @@
+#include <core.h>
+#include <list.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "smlng.h"
+#include "tag_elim.h"
+#include "dynamic.h"
+#include "timer.h"
+#include "buffer.h"
+#include "parser.h"
+#include "flat.h"
+using Core;
+using List;
+using Buffer;
+using Parser;
+using TagElim;
+
+// we conservatively guess that we get only 8M of stack (set in main)
+// we'd use getrlimit, but we're not developing under Linux. :-(
+unsigned int stack_limit = 0; 
+bool check_stack() {
+  unsigned int x=0; 
+  unsigned int current_stack_address = (unsigned int)&x;
+  //  fprintf(stderr,"\n%u %u %u", current_stack_address, stack_limit,
+  //	  current_stack_address - stack_limit);
+#ifdef UP_STACK
+  return ((stack_limit - current_stack_address) > 10000);
+#else
+  return ((current_stack_address - stack_limit) > 10000);
+#endif
+}
+
+bool is_change = true;
+bool longer_seq = false;
+
+string_t start_tags[] = {
+  "<0>", "<1>", "<2>", "<3>", "<4>", "<5>", "<6>", "<7>", "<8>", "<9>",
+  "<B>", "<EM>", "<I>", "<PL>", "<S>", "<TT>", "<U>", "<r>", "<g>",
+  "<b>", "<c>", "<m>", "<y>", "<k>", "<w>"
+};
+string_t end_tags[] = {
+  "</0>", "</1>", "</2>", "</3>", "</4>", "</5>", "</6>", "</7>", "</8>", 
+  "</9>", "</B>", "</EM>", "</I>", "</PL>", "</S>", "</TT>", "</U>", "</r>", 
+  "</g>", "</b>", "</c>", "</m>", "</y>", "</k>", "</w>"
+};
+
+extern tunion Document;
+tunion Document {
+  Seq(List::list_t<doc_t>); // list must NEVER BE SHARED
+  Text(unsigned int);
+  Spc(unsigned int);
+  Tagged(tag_t,doc_t);
+  Mt;
+};
+
+bool is_white(char c) {
+  switch(c) {
+  case 0x20: 
+  case 0x0D:
+  case 0x0A:
+  case 0x09: return true;
+  default: return false;
+  }
+}
+
+// does not copy the actual text
+doc_t copy_doc(doc_t d) {
+  switch(d) {
+  case &Text(i): return new Text(i);
+  case &Spc(i): return new Spc(i);
+  case &Seq(ds): return new Seq(List::copy(ds));
+  case &Tagged(t,d): return new Tagged(t,d);
+  case Mt: return Mt;
+  }
+}
+
+/* Iterative dump so we don't go over the stack limit.
+   The old, recursive dump is now called dump_rec, see
+   below. */
+tunion finish {
+  EndTag(tag_t);
+  DocSeq(List::list_t<doc_t>);
+};
+typedef tunion finish dump_finish_t;
+void dump_iter(buf_t b, doc_t d) {
+  List::list_t<dump_finish_t> fs = List::list(new DocSeq(List::list(d)));
+  while (fs != NULL) {
+    let f = fs->hd;
+    fs = fs->tl;
+    switch (f) {
+    case &EndTag(tag):
+      try {
+        fwrite(end_tags[tag],1,strlen(end_tags[tag]),stdout);
+      } catch {
+      default: fprintf(stderr,"bad tag %d\n",tag); exit(1); break;
+      }
+      break;
+    case &DocSeq(docs):
+      while (docs != NULL) {
+        let d2 = docs->hd;
+        docs = docs->tl;
+        switch (d2) {
+        case &Text(i): Buffer::write_buf(stdout,b,i); break;
+        case &Spc(i): Buffer::write_buf(stdout,b,i); break;
+        case &Tagged(tag,d3):
+          try {
+            fwrite(start_tags[tag],1,strlen(start_tags[tag]),stdout); 
+            fs = new List::List(new DocSeq(List::list(d3)),
+                                new List::List(new EndTag(tag),
+                                               new List::List(new DocSeq(docs),
+                                                              fs)));
+            docs = NULL; // To get out of the inner while loop
+          } catch {
+          default: fprintf(stderr,"bad tag %d\n",tag); exit(1); break;
+          }
+          break;
+        case &Seq(ds):
+          docs = List::imp_append(ds,docs);
+          break;
+        case Mt: break;
+        }
+      }
+      break;
+    }
+  }
+}
+
+/* Old version of dump: simple but can go over stack limit */
+void dump_rec(buf_t b, doc_t d) {
+  switch (d) {
+  case &Seq(ds): for (; ds != NULL; ds=ds->tl) dump_rec(b,ds->hd); break;
+  case &Text(i): Buffer::write_buf(stdout,b,i); break;
+  case &Spc(i): Buffer::write_buf(stdout,b,i); break;
+  case &Tagged(tag,d):
+    try {
+      fwrite(start_tags[tag],1,strlen(start_tags[tag]),stdout); 
+      dump_rec(b,d); 
+      fwrite(end_tags[tag],1,strlen(end_tags[tag]),stdout);
+    } catch {
+    default: fprintf(stderr,"bad tag %d\n",tag); exit(1); break;
+    }
+    break;
+  case Mt: break;
+  }
+}
+
+// not stack safe
+int doc_size(buf_t b,doc_t d) {
+  int sum = 0;
+  switch (d) {
+  case &Seq(ds):
+    for (; ds != NULL; ds=ds->tl)
+      sum += doc_size(b,ds->hd); 
+    break;
+  case &Text(i): sum += Buffer::size(b,i); break;
+  case &Spc(i): sum += Buffer::size(b,i); break;
+  case &Tagged(tag,d):
+    sum += start_tags[tag].size;
+    sum += doc_size(b,d);
+    sum += end_tags[tag].size;
+    break;
+  case Mt: break;
+  }
+  return sum;
+}
+
+// not stack safe
+unsigned int num_texts(doc_t d) {
+  unsigned int sum = 0;
+  switch (d) {
+  case &Seq(ds):
+    for (; ds != NULL; ds=ds->tl)
+      sum += num_texts(ds->hd); 
+    break;
+  case &Text(s): ++sum; break;
+  case &Spc(s): ++sum; break;
+  case &Tagged(tag,d):
+    sum += num_texts(d);
+    break;
+  case Mt: break;
+  }
+  return sum;
+}
+// not stack safe 
+unsigned int num_tags(doc_t d) {
+  switch (d) {
+  case &Seq(ds):
+    unsigned int sum = 0;
+    for (; ds != NULL; ds=ds->tl)
+      sum += num_tags(ds->hd); 
+    return sum;
+  case &Tagged(_,d):
+    return num_tags(d) + 1;
+  default: return 0;
+  }
+}
+
+
+struct Context {
+  unsigned int B :1;
+  unsigned int EM :1;
+  unsigned int I :1;
+  unsigned int S :1;
+  unsigned int TT :1;
+  char U :2;    // [0-3]
+  char size;    // [0-9]
+  char color;   // [r_tag-w_tag]
+};
+context_t init_context = {
+  .B = false, .EM = false, .I = false, .S = false, .TT = false, .U = false,
+  .size = DONT_KNOW, .color = DONT_KNOW
+};
+
+/*filtering out Mt's in a list of docs
+ *used in remove_Mt(doc_t d) */
+static List::list_t<doc_t> filter_Mt(List::list_t<doc_t,`H> ds){
+  while(ds != NULL && ds->hd == Mt)
+    ds = ds->tl;
+  if(ds == NULL)
+    return NULL;
+  let prev = ds;
+  let ds2 = ds->tl;
+  for(; ds2 != NULL; ds2 = ds2->tl) {
+    if(ds2->hd == Mt)
+      prev->tl = ds2->tl;
+    else
+      prev = ds2;
+
+  }
+  return ds;
+}
+
+// for deep-nesting and no stack overflow
+static list_t<doc_t> down_workstack = NULL;
+
+//getting rid of Mt branches
+doc_t remove_Mt_rec(doc_t d){
+#ifdef CHECK_STACK 
+  if(!check_stack()) {
+    fprintf(stderr,"\nstack-overflow -- mtrec, recovering");
+    down_workstack = new List(d,down_workstack);
+    return d;
+  }
+#endif
+  switch(d){
+  case &Seq(ds):
+    let oldds = ds;
+    for(; ds!=NULL; ds=ds->tl)
+      ds->hd = remove_Mt_rec(ds->hd);
+    ds = filter_Mt(oldds);
+    if (ds==NULL) return Mt;
+    if (ds->tl==NULL) return ds->hd;//size 1
+    return new Seq(ds);
+  case &Text(_): return d;
+  case &Spc(_):  return d;
+  case &Tagged(tag,*d2):
+    let d3 = remove_Mt_rec(*d2);
+    if (d3 == Mt) return Mt;
+    return new Tagged(tag,d3);
+  case Mt: return Mt;
+  }
+}
+
+doc_t remove_Mt(doc_t d) {
+  doc_t ans = remove_Mt_rec(d);
+  while(down_workstack != NULL) {
+    doc_t next = down_workstack->hd;
+    down_workstack = down_workstack->tl;
+    remove_Mt_rec(next);
+  }
+  return ans;
+}
+
+// These are for testing w/o having the write stack check!
+
+// gets rid of redundant tags in a top-down fashion
+doc_t down_opt_rec(context_t ctxt, doc_t d) {
+#ifdef CHECK_STACK 
+  if(!check_stack()) {
+    fprintf(stderr,"\nstack-overflow -- down_opt, recovering");
+    down_workstack = new List(d,down_workstack);
+    return d;
+  }
+#endif
+  switch (d) {
+  case &Seq(ds):
+    for (; ds!=NULL; ds=ds->tl)
+      ds->hd = down_opt_rec(ctxt,ds->hd);
+    return d;
+  case &Text(_): return d;
+  case &Spc(_):  return d;
+  case &Tagged(tag,*d2):
+    switch (tag) {
+    case B_tag:
+      if (ctxt.B) {is_change = true; return down_opt_rec(ctxt,*d2);}
+      ctxt.B = true; 
+      break;
+    case EM_tag:
+      if (ctxt.S) {is_change = true; return down_opt_rec(ctxt,*d2);} 
+      switch(*d2){
+      case &Tagged(tag_in_EM,*d3):
+        if (tag_in_EM==EM_tag){
+          is_change = true;
+          return down_opt_rec(ctxt, *d3);
+        }
+        break;
+      case &Seq(ds):
+        switch(ds->hd){
+        case &Tagged(tag_in_EM,*d3):
+          if (tag_in_EM==EM_tag){
+            is_change = true;
+            ds->hd = down_opt_rec(ctxt,*d3);
+            let tail_doc = down_opt_rec(ctxt,new Tagged(EM_tag, new Seq(ds->tl)));
+            ds->tl = new List::List(tail_doc,NULL);
+            return new Seq(ds);
+          }
+          break;
+        default:
+          if (ds->tl){
+            //find the last doc
+            let previous = ds;
+            let tail_docs = ds->tl;
+            while(tail_docs->tl){
+              previous = tail_docs;
+              tail_docs = tail_docs->tl;
+            }
+            switch(tail_docs->hd){
+            case &Tagged(tag_in_EM,*d3):
+              if (tag_in_EM==EM_tag){
+                is_change = true;
+                previous->tl = NULL;
+                let head_docs = down_opt_rec(ctxt,new Tagged(EM_tag,new Seq(ds)));
+                let last_doc = down_opt_rec(ctxt, *d3);
+                ds = new List::List(head_docs,new List::List(last_doc,NULL));
+                return new Seq(ds);
+              }
+              break;
+            default:
+              break;
+            }
+          }
+          break;
+        }
+        break;
+      default:
+        break;
+      }
+      ctxt.EM = !ctxt.EM; 
+      break;
+    case I_tag:
+      if (ctxt.I) {is_change = true; return down_opt_rec(ctxt,*d2);}
+      ctxt.I = true;
+      break;
+    case PL_tag:
+      // PL clears the U, B, EM, I, S, and TT attributes
+      if (ctxt.U == 0 && !ctxt.B && !ctxt.EM && !ctxt.I && !ctxt.S && !ctxt.TT){
+	is_change = true;
+        return down_opt_rec(ctxt,*d2);
+      }
+      ctxt.U = 0; ctxt.B = false; ctxt.EM = false; ctxt.I = false;
+      ctxt.S = false; ctxt.TT = false;
+      break;
+    case S_tag:
+      if (ctxt.S) {is_change=true; return down_opt_rec(ctxt,*d2);}
+      ctxt.S = true;
+      ctxt.EM = false; // S hides the EM attribute
+      break;
+    case TT_tag:
+      if (ctxt.TT) {is_change=true; return down_opt_rec(ctxt,*d2);}
+      ctxt.TT = true;
+      break;
+    case U_tag:
+      if (ctxt.U == 3){is_change=true; return down_opt_rec(ctxt,*d2);}
+      ctxt.U++;
+      break;
+    case Zero:
+    case One:
+    case Two:
+    case Three:
+    case Four:
+    case Five:
+    case Six:
+    case Seven:
+    case Eight:
+    case Nine:
+      char sz = (char)tag;
+      if (ctxt.size == sz) {
+	is_change=true; return down_opt_rec(ctxt,*d2);
+      }
+      ctxt.size = sz;
+      break;
+    case r_tag:
+    case g_tag:
+    case b_tag:
+    case c_tag:
+    case m_tag:
+    case y_tag:
+    case k_tag:
+    case w_tag:
+      char color = (char)tag;
+      if (ctxt.color == color) 
+	{is_change=true; return down_opt_rec(ctxt,*d2);}
+      ctxt.color = color;
+      break;
+    default: throw new Impossible("down_opt");
+    }
+    *d2 = down_opt_rec(ctxt,*d2);
+    return d;
+  case Mt: return Mt;
+  }
+}
+
+doc_t down_opt(context_t ctxt, doc_t d) {
+  doc_t ans = down_opt_rec(ctxt,d);
+  while(down_workstack != NULL) {
+    fprintf(stderr,"#");
+    doc_t next = down_workstack->hd;
+    down_workstack = down_workstack->tl;
+    down_opt_rec(init_context,next);
+  }
+  return ans;
+}
+
+// Queues for fast append
+struct Q {
+  List::list_t<doc_t> first;
+  List::list_t<doc_t> last;
+};
+
+struct Q qappend(struct Q q1, struct Q q2) {
+  if (q1.last == NULL) return q2;
+  else if (q2.last == NULL) return q1;
+  else {
+    q1.last->tl = q2.first;
+    q1.last = q2.last;
+    return q1;
+  }
+}
+
+/* removes all of the Seq's from a document, returning it as a list of 
+   non-Seq-containing docs */
+struct Q flattenit(doc_t d) {
+  switch (d) {
+  case &Seq(ds):
+    struct Q q = {NULL,NULL};
+    List::list_t<doc_t> ds1, ds_tot = NULL;
+    for (; ds != NULL; ds = ds->tl) 
+      q = qappend(q,flattenit(ds->hd));
+    return q;
+  case &Text(i): 
+    let x = new List::List(d,NULL);
+    return Q{x,x};
+  case &Spc(i): 
+    let x = new List::List(d,NULL);
+    return Q{x,x};
+  case &Tagged(tag,d):
+    struct Q q = flattenit(d);
+    for (_ x = q.first; x != NULL; x = x->tl) 
+      x->hd = new Tagged(tag,x->hd);
+    return q;
+  case Mt: return Q{NULL,NULL};
+  }
+}  
+
+List::list_t<doc_t> flatten(doc_t d) {
+  return flattenit(d).first;
+}
+
+extern void validate_docs(buf_t,doc_t,doc_t);
+
+int main(int argc, char ?`H ?`H argv) {
+  string_t tlimit = "182";
+  FILE @f = stdin;
+
+  // let's give ourselves 7Mb
+  int x = 0;
+#ifdef UP_STACK
+  stack_limit = ((unsigned int)&x) + ((1 << 23) - (1 << 20));
+#else
+  stack_limit = ((unsigned int)&x) - ((1 << 23) - (1 << 20));
+#endif
+
+  if (argc <= 1) {
+    tlimit = getenv("TLIMIT");
+    if (tlimit == NULL) {
+      fprintf(stderr,"please set the TLIMIT environment variable\n"
+	      "or give a time limit command argument.\n");
+      exit(1);
+    }
+  } else {
+    tlimit = argv[1];
+    if (argc >= 3) {
+      FILE *g = fopen(argv[2],"r");
+      if (g != NULL) f = (FILE @)g;
+    }
+  }
+  start_timer(tlimit);
+  if(sizeof(TagElim::synth_t) != sizeof(unsigned long long))
+    fprintf(stderr, "TagElim::synth_t has gotten too big!!!");
+  buf_t b = init_buf();
+  fprintf(stderr,"getting docs..."); fflush(stderr);
+  // doc_t orig = parse_iter(init_context,b,f);
+  // fprintf(stderr,"%d\ncopying docs...",check_time()); fflush(stderr);
+  // doc_t d = copy_doc(orig);
+  doc_t d = parse_iter(init_context,b,f); // or parse_rec...
+  //  fprintf(stderr,"\ndumping..."); fflush(stderr);
+  //  dump(b,d);
+  //  fprintf(stderr,"\nfinished!\n"); fflush(stderr);
+  fprintf(stderr,"\nDONE PARSING\n");
+  d = remove_Mt(d);
+
+  try {
+   // JGM: uncomment to try the bottom up approach
+  //fprintf(stderr,"%d\nflatten into array...", check_time());
+  //d = Flat::flatten_array(d);
+  
+  is_change = true;
+  int round_num = 1;
+  int outer_round_num = 0;
+  while(is_change && check_time() > 2 && outer_round_num < 10) {
+    ++outer_round_num;
+    while(is_change && check_time() > 2  && round_num < 12) {
+      is_change = false;
+      fprintf(stderr,"%d\nup_opt...", check_time()); fflush(stderr);
+      d = TagElim::up_opt(d)[0];
+      fprintf(stderr,"%d\ndown_opt...", check_time()); fflush(stderr);
+      d = down_opt(init_context,d);
+      ++round_num;
+    }
+
+    if(round_num > 1 && check_time() > 8) {
+      fprintf(stderr,"%d\nup_shuffle...", check_time()); fflush(stderr);
+      d = TagElim::up_shuffle(d)[0];
+
+      fprintf(stderr,"%d\nunder_elim...", check_time()); fflush(stderr);
+      d = TagElim::under_elim(d)[0];
+            // down_opt must precede up_opt 
+      fprintf(stderr,"%d\ndown_opt...", check_time()); fflush(stderr);
+
+      d = remove_Mt(d);
+      d = down_opt(init_context,d);
+      is_change = true;
+      round_num = 0;
+    }
+  }
+  // notice we wait until cheaper things have run
+  // don't put any optimizations after this -- it tries to hog the time
+  // BTW, it's expensive to keep flattening and unflattening the sequences,
+  // but it's nice to iterate way out here.
+  int  window_size = 20;
+  while(window_size < MAX_WINDOW_SIZE) {
+    fprintf(stderr," %d\ndynamic_regions %d ...", 
+	    check_time(), window_size); 
+    fflush(stderr);
+    // toggle the shift -- don't bother
+    //shift_window = !shift_window;
+
+    // run the optimization
+    int start_time = check_time();
+    let $(d2,DynSynth(num_sz,num_col,sz,col)) = 
+      dynamic_regions(d,false,window_size);
+    //    fprintf(stderr, "X %d", num_sz);
+    d = d2;
+    if(sz && num_sz > 2) {
+      d = dynamic_size(d,false,window_size);
+    } if(col && num_col > 2)
+      d = dynamic_color(d,false,window_size);
+
+    // check for progress, if so continue with wider window
+    int end_time = check_time();
+    if(longer_seq) {
+      longer_seq = false;
+      window_size += 10;
+      // see if we have time, 4 is not the right thing!
+      int old_time = start_time - end_time;
+      int new_time = 
+	  (old_time*window_size*window_size) 
+	/ ((window_size - 10) * (window_size - 10));
+      fprintf(stderr, "\nold: %d, new: %d ", (int)old_time, (int)new_time);
+      if(new_time > end_time - 7)
+	break;
+    } else
+      break;
+  }
+  } catch {
+  case e: 
+    fprintf(stderr, "...uncaught exception! dumping anyway...");
+    fflush(stderr);
+    break;
+  }
+  fprintf(stderr,"%d\ndumping docs...",check_time()); fflush(stderr);
+  dump_iter(b,d);
+  let t = check_time();
+  fprintf(stderr,"time left: %d sec out of %s sec\n",t,tlimit); fflush(stderr);
+
+  return 0;
+}
+

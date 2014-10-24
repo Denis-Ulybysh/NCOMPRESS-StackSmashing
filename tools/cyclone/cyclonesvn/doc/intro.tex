@@ -1,0 +1,71 @@
+\section{Introduction}
+
+Cyclone is a language for C programmers who want to write secure,
+robust programs.  It's a dialect of C designed to be \emph{safe}: free
+of crashes, buffer overflows, format string attacks, and so on.
+Careful C programmers can produce safe C programs, but, in practice,
+many C programs are unsafe.  Our goal is to make \emph{all} Cyclone
+programs safe, regardless of how carefully they were written.  All
+Cyclone programs must pass a combination of compile-time, link-time,
+and run-time checks designed to ensure safety.
+
+There are other safe programming languages, including Java, ML, and
+Scheme.  Cyclone is novel because its syntax, types, and semantics are
+based closely on C\@.  This makes it easier to interface Cyclone with
+legacy C code, or port C programs to Cyclone.  And writing a new
+program in Cyclone ``feels'' like programming in C: Cyclone tries to
+give programmers the same control over data representations, memory
+management, and performance that C has.
+
+Cyclone's combination of performance, control, and safety make it a
+good language for writing systems and security software.  Writing such
+software in Cyclone will, in turn, motivate new research into safe,
+low-level languages.  For instance, originally, all heap-allocated
+data in Cyclone were reclaimed via a conservative garbage collector.
+Though the garbage collector ensures safety by preventing programs
+from accessing deallocated objects, it also kept Cyclone from being
+used in latency-critical or space-sensitive applications such as
+network protocols or device drivers.  To address this shortcoming, we
+have added a region-based memory management system based on the work
+of Tofte and Talpin.  The region-based memory manager allows you some
+real-time control over memory management and can significantly reduce
+space overheads when compared to a conventional garbage collector.
+Furthermore, the region type system ensures the same safety properties
+as a collector: objects cannot be accessed outside of their lifetimes.
+
+This manual is meant to provide an informal introduction to Cyclone.
+We have tried to write the manual from the perspective of a C 
+programmer who wishes either to port code from C to Cyclone, or
+develop a new system using Cyclone.  Therefore, we assume a fairly
+complete understanding of C.
+
+Obviously, Cyclone is a work in progress and we expect to make
+substantial changes to the design and implementation.  Your feedback
+(and patience) is greatly appreciated.
+
+\subsection{Acknowledgements}
+
+The people involved in the development of Cyclone are now at Harvard,
+AT\&T\@, Maryland, and Washington; much work began at Cornell.  Dan
+Grossman, Trevor Jim, and Greg Morrisett worked out the initial design
+and implementation, basing the language to some degree on Popcorn, a
+safe-C-like language that was developed at Cornell as part of the
+\href{http://www.cs.cornell.edu/talc}{Typed Assembly Language} (TAL)
+project.  Mike Hicks ported a number of libraries and programs to
+Cyclone, helped with the configuration and installation procedures,
+and has been the lead on adding unique and reference-counted pointers
+to Cyclone, among other things.  Mathieu Baudet contributed the bulk
+of the code for the link-checker.  Matthew Harris did much of the hard
+work needed to wrap and import the necessary libraries.  Yanling Wang
+ported bison and flex to Cyclone.  James Cheney has added support for
+representation types, singleton ints, marshalling support, etc. Nikhil
+Swamy added support for reaps and the cyclone-inf mode. All of these
+people have also contributed by finding and fixing various bugs.  A
+number of other people have also helped to find bugs and/or
+contributed key design ideas including Mujtaba Ali, Fred Smith, Nathan
+Lutchansky, Rajit Manohar, Bart Samwell, Emmanuel Schanzer, Frances
+Spalding, Jeff Vinocur, and David Walker.
+
+% Local Variables:
+% TeX-master: "main-screen"
+% End:

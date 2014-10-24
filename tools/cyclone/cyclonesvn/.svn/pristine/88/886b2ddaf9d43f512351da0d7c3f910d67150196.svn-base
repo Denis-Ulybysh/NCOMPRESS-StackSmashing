@@ -1,0 +1,408 @@
+/* This file is part of the Cyclone Library.
+   Copyright (C) 2005 Greg Morrisett, AT&T
+
+   This library is free software; you can redistribute it and/or it
+   under the terms of the GNU Lesser General Public License as
+   published by the Free Software Foundation; either version 2.1 of
+   the License, or (at your option) any later version.
+
+   This library is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+
+   You should have received a copy of the GNU Lesser General Public
+   License along with this library; see the file COPYING.LIB.  If not,
+   write to the Free Software Foundation, Inc., 59 Temple Place, Suite
+   330, Boston, MA 02111-1307 USA. */
+
+#include <unistd.h>
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+
+#include "ykbuf.h"
+
+ykbuf_t @fd2ykbuf(int fd) {
+  let buf = malloc(YKBSIZE*sizeof(unsigned char));
+  let result = new ykbuf {
+    .prod=new ykp_fd(fd),
+    .bot=buf,
+    .save=NULL,
+    .mark=NULL,
+    .cur=buf,
+    .lim=buf,
+    .top=buf+YKBSIZE,
+    .eof=0,
+    .save_count=0,
+    .discarded=0};
+  return result;
+}
+ykbuf_t @p2ykbuf(Fn::fn_t<$(unsigned char ?@nozeroterm `H,int)@`H,int,`H> f) {
+  let buf = malloc(YKBSIZE*sizeof(unsigned char));
+  let result = new ykbuf {
+    .prod=new ykp_p(f),
+    .bot=buf,
+    .save=NULL,
+    .mark=NULL,
+    .cur=buf,
+    .lim=buf,
+    .top=buf+YKBSIZE,
+    .eof=0,
+    .save_count=0,
+    .discarded=0};
+  return result;
+}
+
+// TODO: this is annoying, we have to copy the string.
+// Actually it should not be necessary because we never
+// modify the string, unlike when we need to fill a buffer.
+ykbuf_t @string2ykbuf(const char ?s) {
+  let len = strlen(s);
+  let buf = malloc((len+1)*sizeof(char));
+  memcpy(buf,s,len);
+  buf[len] = '\0';
+  let result = new ykbuf {
+    .prod=NULL,
+    .bot=buf,
+    .save=NULL,
+    .mark=NULL,
+    .cur=buf,
+    .lim=buf,
+    .top=buf+YKBSIZE,
+    .eof=1,
+    .save_count=0,
+    .discarded=0};
+  return result;
+}
+ykbuf_t @data2ykbuf(const char ?@nozeroterm s) {
+  let len = numelts(s);
+  let buf = malloc((len+1)*sizeof(char));
+  memcpy(buf,s,len);
+  buf[len] = '\0';
+  let result = new ykbuf {
+    .prod=NULL,
+    .bot=buf,
+    .save=NULL,
+    .mark=NULL,
+    .cur=buf,
+    .lim=buf,
+    .top=buf+YKBSIZE,
+    .eof=1,
+    .save_count=0,
+    .discarded=0};
+  return result;
+}
+
+/*
+  bot points to the memory object obtained from malloc.
+  top points one past the end of the memory object obtained from malloc.
+  lim points one past the end of the input currently in memory.
+  save is NULL if no input needs to be saved on a fill,
+    else save points at the first character of the input to save.
+  save_count is used to handle nested saves.  When it goes to zero, save should be NULL'd.
+  eof records whether end-of-file has been reached.  Note, re2c (an independent tool) does it
+    a bit differently, eof is a pointer, allows the sentinel to be a legal input character,
+    at the cost of a comparison when a (possible) sentinel is under YKCURSOR.
+
+  mark is set by scanners, it points one past the last input which reached a final state.
+    It is kept as part of the ykbuf_t because it has to be adjusted on fill.
+
+  discarded records the number of characters discarded by ykfill.  It is
+  useful to find the position of the current character with respect to
+  the complete input.
+
+  Scanners should call YKSAVE on entry and YKRESTORE on exit, because they may have to
+    back up to the longest match.
+
+  These invariants are maintained by ykfill:
+  If save == NULL bot < lim <= top
+  If save != NULL bot <= save < lim <= top
+
+  These invariants should be maintained by users of the library:
+  save == NULL iff save_count == 0
+
+  Here are the definitions for using ykbuf_t in a scanner or parser.
+  They assume two variables, ykb of type ykbuf_t, and ykcursor of type
+  unsigned char ?@nozeroterm.
+
+NOTE: These macros appear to be out of date w.r.t. actual generated code.
+#define YKLIMIT ykb->lim
+#define YKCURSOR ykcursor
+#define YKFILL(n) (ykcursor = ykfill(ykb,ykcursor))
+#define YKMARKER ykb->mark
+//#define YKSAVE ((ykb->save)?(ykb->save_count++):((ykb->save=ykcursor),ykb->save_count++))
+//#define YKDISCARD ((--ykb->save_count)?0:(ykb->save==NULL))
+// returns x, the offset of the save from the ykb->save marker.
+#define YKSAVE ({ let x = 0; ykb->save_count++; if (ykb->save) x = ykcursor-ykb->save; else ykb->save = ykcursor; x; })
+#define YKRESTORE(x) ({ let p = ykb->save+x; if (--ykb->save_count == 0) ykb->save=NULL; p; })
+*/
+
+void ykdumpbuf(ykbuf_t @y) {
+  let right = y->lim - y->cur;
+  let left = y->cur - y->bot;
+  let leftp;
+  if (left+right < 80) leftp = y->bot;
+  else if (left < 80) leftp = y->bot;
+  else if (right < 80) leftp = y->lim - 80;
+  else leftp = y->cur - 40;
+
+  fprintf(stderr,"cur = bot + %d\n",left);
+  fprintf(stderr,"lim = bot + %d = cur + %d\n",left+right,right);
+  fprintf(stderr,"Window:\n");
+
+  for (let x = leftp; x < y->lim && x < leftp + 80; x++)
+    if (isprint(*x)) fprintf(stderr," ");
+    else fprintf(stderr,"%x",*x/16);
+  fprintf(stderr,"\n");
+  for (let x = leftp; x < y->lim && x < leftp + 80; x++)
+    if (isprint(*x)) fprintf(stderr,"%c",*x);
+    else fprintf(stderr,"%x",*x%16);
+  fprintf(stderr,"\n");
+  for (let x = leftp; x < y->lim && x < leftp + 80; x++)
+    if (x != y->cur) fprintf(stderr," ");
+    else fprintf(stderr,"*");
+  fprintf(stderr,"\n");
+}
+
+static int ykread(datatype ykproducer *p, unsigned char? @nozeroterm`H b, int n) {
+  switch (p) {
+  case NULL:          return 0;
+  case &ykp_fd(fd):   return read(fd,b,n);
+  //  case &ykp_ssl(ssl): return SSL_read(ssl,b,n);
+  case &ykp_p(f):
+    let x = new $(b,n); // TODO: don't heap-allocate this
+    return Fn::apply(f,x);
+ }
+}
+
+static void ykdiscard(ykbuf_t @s) {
+  // @ensures(s->save == NULL || s->save == s->bot)
+  int cnt;
+  if (s->save) {
+    // discard chars from bot to save, keep chars from save to lim
+    cnt = s->save - s->bot;
+    if (cnt) {
+      memcpy(s->bot, s->save, s->lim - s->save);
+      s->save = s->bot;
+      s->mark -= cnt;
+      s->cur -= cnt;
+      s->lim -= cnt;
+      s->discarded += cnt;
+    }
+  }
+}
+
+static void ykreserve(ykbuf_t @s,unsigned int TO_READ) {
+  if ((s->top - s->lim) < TO_READ)
+    ykdiscard(s);
+  if ((s->top - s->lim) < TO_READ) {
+    unsigned char ?@nozeroterm buf =
+      malloc(((s->lim - s->bot) + TO_READ)*sizeof(unsigned char));
+    // TODO: error when malloc returns 0
+    memcpy(buf, s->bot, s->lim - s->bot);
+    if (s->save) s->save = buf;
+    s->mark = &buf[s->mark - s->bot];
+    // s->mark = buf + (s->mark - s->bot);
+    s->cur = &buf[s->cur - s->bot];
+    //      cursor = buf + (cursor - s->bot);
+    s->lim = &buf[s->lim - s->bot];
+    s->top = &s->lim[TO_READ];
+    // TODO: free(s->bot);
+    s->bot = buf;
+  }
+}
+
+void ykfill(ykbuf_t @s,unsigned int n) {
+  if (s->eof || n <= (s->lim - s->cur)) return;
+  int TO_READ = n - (s->lim - s->cur);
+  if (TO_READ < YKBSIZE) TO_READ = YKBSIZE; // Don't read little chunks
+  // We want to read in TO_READ chars.  Resize the buffer if not enough space.
+  ykreserve(s,TO_READ);
+
+  int cnt;
+  // Read in TO_READ characters
+  while (1) {
+    cnt = ykread(s->prod, s->lim, TO_READ);
+    if (cnt > 0) {
+      s->lim += cnt;
+      if (n <= (s->lim - s->cur)) return; // Enough, don't care if TO_READ>n.
+      TO_READ -= cnt;
+      if (TO_READ == 0) return;
+      continue;
+    }
+    else if (!cnt) {            // end-of-file
+      s->eof = 1;
+      *s->lim = '\0';
+      return;
+    }
+    else { // (cnt < 0)
+      if (errno == EINTR)       // interrupt occurred during a slow read
+        continue;
+      else if (errno == EAGAIN) // read from non-blocking fd, no data available
+        // TODO: maybe we should change the fill API to allow a return here?
+        continue;
+      else {                    // some other error
+        perror("Read error on fill");
+        // Act as if eof was encountered
+        s->eof = 1;
+        *s->lim = '\0';
+        return;
+      }
+    }
+  }
+}
+
+
+/* This has nothing to do with buffers but it's convenient to stick it here. */
+void compress_whitespace(char ?x) {
+  if (!x) return;
+  if (!x[0]) return;
+  const int COPYING_MODE = 0;
+  const int COMPRESSING_MODE = 1;
+  int mode = (isspace(x[0])) ? COMPRESSING_MODE : COPYING_MODE;
+  int i = 0;
+  int j = 0;
+  while (x[j]) {
+    let c = x[j++];
+    let sp = isspace(c);
+    if (!sp) { mode = COPYING_MODE; x[i++] = c; }
+    else if (mode == COPYING_MODE) { x[i++] = ' '; mode = COMPRESSING_MODE; }
+  }
+  x[i--] = 0;
+  if (i > 0 && isspace(x[i])) x[i] = 0; // possible trailing whitespace
+}
+
+/* ykindex(b,c,max) returns the index of character c relative to the
+   start of the buffer b.  It fills as necessary and looks no more
+   than max characters ahead.  If c is not found in max characters it
+   returns max.  If EOF occurs before c is found and before max
+   characters, it returns -1.
+ */
+int ykindex(ykbuf_t @s,unsigned char c,unsigned int n) {
+  int idx = 0;
+
+  /* Look in the current buffer first */
+  for (unsigned int lim = s->lim - s->cur; idx < lim && idx < n; idx++) {
+    if (s->cur[idx] == c) return idx;
+  }
+  if (idx == n) return idx;
+  if (s->eof) return -1;
+
+  ykreserve(s,n-idx);
+  int cnt;
+  unsigned int TO_READ = n-idx;
+  while (1) {
+    /* Invariants:
+       TO_READ == n-idx > 0
+    */
+    cnt = ykread(s->prod, s->lim, TO_READ);
+    if (cnt > 0) {
+      s->lim += cnt;
+      TO_READ -= cnt;
+      for (unsigned int lim = s->lim - s->cur; idx < lim && idx < n; idx++) {
+        if (s->cur[idx] == c) return idx;
+      }
+      if (idx == n) return idx;
+      continue;
+    }
+    else if (!cnt) {   /* end-of-file */
+      s->eof = 1;
+      *s->lim = '\0'; // Zero-terminate.  TO_READ>0 so there should be space
+      return -1;
+    }
+    else { // (cnt < 0)
+      if (errno == EINTR)
+        continue; /* interrupt occurred during a slow read */
+      else if (errno == EAGAIN)
+        continue; /* read from non-blocking fd, no data available */
+      else {      /* some other error */
+        perror("Read error on fill");
+        // Act as if eof was encountered
+        s->eof = cnt = 1;
+        *s->lim = '\0';
+        return -1;
+      }
+    }
+  }
+}
+
+/* ykbgets(s,size,ykb) reads in at most one less than size characters
+   from ykb and stores them into the buffer pointed to by s.  Reading
+   stops after an EOF or a newline.  If a newline is read, it is
+   stored into the buffer.  A 0 is stored after the last character in
+   the buffer.
+   Replacement for fgets(s,size,f).
+*/
+#define YKCURSOR ykb->cur
+char ?@nozeroterm`r ykbgets(char ?@nozeroterm`r s, int size, ykbuf_t @ykb) {
+  if (size <= 1) return NULL;
+  let idx = ykindex(ykb,'\n',size-1);
+  if (idx == -1) return NULL; /* EOF */
+  if (idx >= size-1) return NULL; /* newline not found */
+  /* idx <= size-2 */
+  for (int i = 0; i <= idx; i++) s[i] = *YKCURSOR++; /* TODO: use memcpy */
+  s[idx+1] = '\0';
+  return s;
+}
+
+/* ykbread(s,n,ykb) reads n characters from ykb, storing them in s.  It
+   returns the number of characters read.  If an error or EOF occurs
+   it returns a short count or 0.
+   Replacement for fread(s,1,n,f).
+*/
+size_t ykbread(char ?@nozeroterm s, size_t n, ykbuf_t @ykb) {
+  let bsize = ykb->lim - ykb->cur; // characters currently in buffer
+  if (bsize >= n) {
+    for (int i = 0; i < n; i++) s[i] = *YKCURSOR++; /* TODO: use memcpy */
+    return n;
+  }
+  if (ykb->eof) {
+    for (int i = 0; i < bsize; i++) s[i] = *YKCURSOR++; /* TODO: use memcpy */
+    return bsize;
+  }
+  ykreserve(ykb,n-bsize); // bsize < n, reserve space to read the rest
+  int cnt;
+  unsigned int TO_READ = n-bsize;
+  while (1) {
+    /* Invariants:
+       TO_READ == n-bsize > 0
+       bsize == (ykb->lim - ykb->cur)
+     */
+    if ((cnt = ykread(ykb->prod, ykb->lim, TO_READ)) == TO_READ) {
+      /* We've read all we need, there should be n characters in the buffer */
+      ykb->lim += cnt;
+      //      TO_READ -= cnt; // TO_READ == 0
+      //      bsize += cnt;   // bsize == n == (ykb->lim - ykb->cur)
+      for (int i = 0; i < n; i++) s[i] = *YKCURSOR++; /* TODO: use memcpy */
+      return n;
+    }
+    else if (cnt > 0) {
+      /* read fewer than TO_READ characters for some other reason */
+      ykb->lim += cnt;
+      TO_READ -= cnt;
+      bsize += cnt;
+      continue;
+    }
+    else if (!cnt) {   /* end-of-file */
+      ykb->eof = 1;
+      *ykb->lim = '\0'; // Zero-terminate.  TO_READ>0 so there should be space
+      for (int i = 0; i < bsize; i++) s[i] = *YKCURSOR++; /* TODO: use memcpy */
+      return bsize;
+    }
+    else { /* (cnt < 0) */
+      if (errno == EINTR)
+        continue; /* interrupt occurred during a slow read */
+      else if (errno == EAGAIN)
+        continue; /* read from non-blocking fd, no data available */
+      else {      /* some other error */
+        perror("Read error on fill");
+        // Act as if eof was encountered
+        ykb->eof = 1;
+        ykb->lim = '\0';
+        for (int i = 0; i < bsize; i++) s[i] = *YKCURSOR++; /* TODO: use memcpy */
+        return bsize;
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+%s\ COPY\ %s\ %s\ 
+%s\ %s\ 
+%s
+T\ COPY\ %s:1341\ INBOX\ 
+(command T (command-select (copy %s:%s INBOX)))
+(command T (command-select (copy %s INBOX)))
+(command T (command-select (copy %s INBOX)))
+(command T (create %s))
+(command T %s)
+T\ COPY\ 5:1341\ INBOX\ 
+T\ COPY\ *:*,5:7\ "bar"\ 
+T\ COPY\ 1237\ "bar"\ 
+T\ COPY\ 7\ "bar"\ 
+T\ CLOSE\ 
+(command T (create "foo"))
+(command T (copy 7 INBOX))
+(command T (command-select (copy 7 INBOX)))
+(command T (command-select COPY\ *:*\ "bar"))
+(command T COPY\ *:*,5:7\ "bar")
+(command T COPY\ *:*\ "bar")
+(command T CLOSE)
+(command T COPY\ 5:1341\ INBOX)
+(command T CLOSE)
+(command T (command-select COPY\ 5:1341\ "bar"))
+(command T (command-select CLOSE))

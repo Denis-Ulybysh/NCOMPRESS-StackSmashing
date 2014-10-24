@@ -1,0 +1,1678 @@
+/* Analyze properties of BNF grammars */
+/* Copyright (C) 2005 Greg Morrisett, AT&T.
+   This file is part of the Cyclone project.
+
+   Cyclone is free software; you can redistribute it
+   and/or modify it under the terms of the GNU General Public License
+   as published by the Free Software Foundation; either version 2 of
+   the License, or (at your option) any later version.
+
+   Cyclone is distributed in the hope that it will be
+   useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+   of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with Cyclone; see the file COPYING. If not,
+   write to the Free Software Foundation, Inc., 59 Temple Place -
+   Suite 330, Boston, MA 02111-1307, USA. */
+
+
+#include "analyze.h"
+#include "cs.h"
+#include "pr.h"
+#include "fa.h"
+#include "axarray.h"
+#include "dfa-core.h"
+#include "earley.h"
+#include <hashtable.h>
+#include <string.h>
+
+#define EMPTYSET (Set::empty(strptrcmp))
+#define EMPTYTABLE (Hashtable::create(101,strptrcmp,Hashtable::hash_stringptr))
+
+/***************************** GLOBALS *****************************/
+static struct grammar *globals;
+
+void reset_globals() {
+  globals = new grammar {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
+}
+
+void init_recursive (grammar_t ds) {
+  if (!globals) reset_globals();
+  if (globals->rec_symbols) return;
+  /* Detect recursively defined grammar symbols */
+  let g = dependency_graph(ds);
+  let tclosed = Graph::tc(g);
+  // FIX: the definition of cmp below gives warning "initialization from incompatible pointer type"
+  // This seems like a compiler bug, the commented declarations help debug
+  // int *cmp = g.rel;
+  // int (@`H cmp)(str_t,str_t) = (int (@`H)(str_t,str_t))g.rel;  // STILL GIVES WARNING!
+  let cmp = g.rel;
+  globals->rec_symbols = Set::empty(cmp);
+  globals->rec_dep_symbols = Set::empty(cmp);
+  let edges = Dict::to_list(tclosed);
+  for (let e = edges; e; e = e->tl) {
+    let &$(s,ts) = e->hd;
+    if (Set::member(ts,s)) globals->rec_symbols = Set::insert(globals->rec_symbols,s);
+  }
+  for (let e = edges; e; e = e->tl) {
+    let &$(s,ts) = e->hd;
+    if (!Set::member(globals->rec_symbols,s) && !Set::is_empty(Set::intersect(globals->rec_symbols,ts)))
+      globals->rec_dep_symbols = Set::insert(globals->rec_dep_symbols,s);
+  }
+  if (globals->rec_symbols && !Set::is_empty(globals->rec_symbols)) {
+    warn("the following symbols are defined recursively:");
+    fprint_strset(stderr,globals->rec_symbols);
+  }
+  if (globals->rec_dep_symbols && !Set::is_empty(globals->rec_dep_symbols)) {
+    warn("the following symbols depend on recursively-defined symbols:");
+    fprint_strset(stderr,globals->rec_dep_symbols);
+  }
+}
+
+strset_t recursive_symbols(grammar_t grm) {
+  init_recursive(grm);
+  return (strset_t)globals->rec_symbols;
+}
+
+/**************************** EMPTYNESS ****************************/
+int empty_rule(rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    return Set::member(globals->maybe_empty,new x);
+  case &Prose(x):
+//    eprintf("Warning: cannot determine whether prose can be"
+//            " the empty string:\n<%s>\n",
+//            x);
+    return 0;
+  case &CharRange(_,_):
+  case &Minus(_,_): /* Assume this only gives character sets */
+    return 0;
+  case &Lit(x):
+    return (strlen(x) == 0);
+  case &Seq(r2,r3):
+    return empty_rule(r2) && empty_rule(r3);
+  case &Alt(r2,r3):
+    return empty_rule(r2) || empty_rule(r3);
+  case &Opt(r2):
+    return 1;
+  case &Rcount(_,r2):
+    // FIX: who knows?
+    return 1;
+  case &Star(m,_,r2):
+    return (m == 0) || empty_rule(r2);
+  case &Hash(m,_,r2):
+    return (m == 0) || ((m == 1) && empty_rule(r2));
+  }
+}
+
+/* Initializes the maybe_empty set */
+void init_maybe_empty(grammar_t grm) {
+  if (!globals) reset_globals();
+  if (globals->maybe_empty) return;
+  int before, after;
+
+  globals->maybe_empty = EMPTYSET;
+  do {
+    before = Set::cardinality(globals->maybe_empty);
+    for (let t = grm; t; t = t->tl) {
+      let &$(n,r,_) = t->hd;
+      let nptr = new n;
+      if (Set::member(globals->maybe_empty,nptr)) continue;
+      if (empty_rule(r)) globals->maybe_empty = Set::insert(globals->maybe_empty,nptr);
+    }
+    after = Set::cardinality(globals->maybe_empty);
+  } while (before != after);
+}
+
+void report_empty_nonterminals(grammar_t grm) {
+  init_maybe_empty(grm);
+  strset_t s = globals->maybe_empty;
+  if (Set::is_empty(s))
+    eprintf("No symbols can derive the empty string.\n");
+  else {
+    eprintf("The following symbols can derive the empty string:");
+    fprint_strset(stderr,s);
+  }
+}
+
+/************************** LEFT RECURSION **************************/
+struct mset { strset_t s; }; /* Mutable set */
+typedef struct mset @`r mset_t<`r>;
+static void left_rule(mset_t result, rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    result->s = Set::insert(result->s,new x);
+    return;
+  case &Prose(x):
+//    eprintf("Warning: cannot determine the left symbols of prose:\n"
+//            "<%s>\n",
+//            x);
+    return;
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  case &Seq(r2,r3):
+    left_rule(result,r2);
+    if (empty_rule(r2)) left_rule(result,r3);
+    return;
+  case &Alt(r2,r3):
+    left_rule(result,r2);
+    left_rule(result,r3);
+    return;
+  case &Opt(r2):
+    left_rule(result,r2);
+    return;
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    left_rule(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    left_rule(result,r2);
+    return;
+  }
+}
+
+void report_left_recursion(grammar_t grm) {
+  init_maybe_empty(grm);
+  let graph = Graph::empty(strptrcmp);
+  for (let t = grm; t; t = t->tl) {
+    let result = new mset { EMPTYSET };
+    let &$(n,r,_) = t->hd;
+    left_rule(result,r);
+    graph = Graph::add_edges(graph,new n,result->s);
+  }
+  graph = Graph::tc(graph);
+  /* Now, (A,B) in graph iff B appears at the left of a derivation from A */
+  let N = EMPTYSET;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,_,_) = t->hd;
+    let nptr = new n;
+    let ntargets = Graph::get_targets(graph,nptr);
+    if (Set::member(ntargets,nptr))
+      N = Set::insert(N,nptr);
+  }
+  if (Set::is_empty(N))
+    eprintf("There is no left recursion in the grammar.\n");
+  else {
+    eprintf("The following symbols are left-recursive:\n");
+    while (Set::cardinality(N) > 0) {
+      let x = Set::choose(N);
+      N = Set::delete(N,x);
+      eprintf("%s\n",*x);
+    }
+  }
+}
+
+/****************************** FIRST ******************************/
+/* globals->maybe_empty, globals->firstt must be initialized */
+void first(cs_t result, rule_t r) {
+  switch (r->r) {
+  case &CharRange(min,max):
+    for (; min <= max; min++)
+      cs_insert(result,(unsigned char)min);
+    return;
+  case &Lit(x):
+    if (strlen(x) > 0) {
+      let c = x[0];
+      cs_insert(result,toupper(c));
+      cs_insert(result,tolower(c));
+    }
+    return;
+  case &Minus(_,_):
+    eprintf( "Internal error: first is applied to Minus\n");
+    return;
+  case &Prose(x):
+//    eprintf("Warning: cannot determine the FIRST characters of prose:\n"
+//            "<%s>\n",
+//            x);
+    return;
+  case &Symb(x,_):
+    let rngptr = Hashtable::lookup_opt(globals->firstt,new x);
+    if (rngptr) cs_union(result,*rngptr);
+    return;
+  case &Seq(r2,r3):
+    first(result,r2);
+    if (empty_rule(r2)) first(result,r3);
+    return;
+  case &Alt(r2,r3):
+    first(result,r2);
+    first(result,r3);
+    return;
+  case &Opt(r2):
+    first(result,r2);
+    return;
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    first(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    first(result,r2);
+    return;
+  }
+}
+
+void init_firstt(grammar_t grm) {
+  if (!globals) reset_globals();
+  if (globals->firstt) return;
+  init_maybe_empty(grm);
+  let graph = Graph::empty(strptrcmp);
+  for (let t = grm; t; t = t->tl) {
+    let result = new mset { EMPTYSET };
+    let &$(n,r,_) = t->hd;
+    left_rule(result,r);
+    graph = Graph::add_edges(graph,new n,result->s);
+  }
+  graph = Graph::tc(graph);
+  /* Now, (A,B) in graph iff B appears at the left of a derivation from A */
+  globals->firstt = EMPTYTABLE;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let rng = cs_empty();
+    first(rng,r);
+    Hashtable::insert(globals->firstt,new n,rng);
+  }
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    let rng = Hashtable::lookup(globals->firstt,nptr);
+    let targets = Graph::get_targets(graph,nptr);
+    while (Set::cardinality(targets) > 0) {
+      let x = Set::choose(targets);
+      targets = Set::delete(targets,x);
+      let rngptr = Hashtable::lookup_opt(globals->firstt,x);
+      if (rngptr) /* missing symbols possible if they are not defined by the grammar */
+	cs_union(rng,*rngptr);
+    }
+  }
+}
+
+/************************* RIGHT RECURSION *************************/
+
+/* right_rule(r) = { A | r =>* xA by a derivation that does not replace nonterminals } */
+static void right_rule(mset_t result, rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    result->s = Set::insert(result->s,new x);
+    return;
+  case &Prose(x):
+    eprintf("Warning: cannot determine the right symbols of prose:\n"
+            "<%s>\n",
+            x);
+    return;
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  case &Seq(r2,r3):
+    right_rule(result,r3);
+    if (empty_rule(r3)) right_rule(result,r2);
+    return;
+  case &Alt(r2,r3):
+    right_rule(result,r2);
+    right_rule(result,r3);
+    return;
+  case &Opt(r2):
+    right_rule(result,r2);
+    return;
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    right_rule(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    right_rule(result,r2);
+    return;
+  }
+}
+
+void report_right_recursion(grammar_t grm) {
+  init_maybe_empty(grm);
+  let graph = Graph::empty(strptrcmp);
+  for (let t = grm; t; t = t->tl) {
+    let result = new mset { EMPTYSET };
+    let &$(n,r,_) = t->hd;
+    right_rule(result,r);
+    graph = Graph::add_edges(graph,new n,result->s);
+  }
+  graph = Graph::tc(graph);
+  /* Now, (A,B) in graph iff B appears at the right of a derivation from A */
+  let N = EMPTYSET;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,_,_) = t->hd;
+    let nptr = new n;
+    let ntargets = Graph::get_targets(graph,nptr);
+    if (Set::member(ntargets,nptr))
+      N = Set::insert(N,nptr);
+  }
+  if (Set::is_empty(N))
+    eprintf("There is no right recursion in the grammar.\n");
+  else {
+    eprintf("The following symbols are right-recursive:\n");
+    while (Set::cardinality(N) > 0) {
+      let x = Set::choose(N);
+      N = Set::delete(N,x);
+      eprintf("%s\n",*x);
+    }
+  }
+}
+
+/****************************** LAST ******************************/
+/* globals->maybe_empty must be initialized */
+void last(cs_t result, rule_t r) {
+  switch (r->r) {
+  case &CharRange(min,max):
+    for (; min <= max; min++)
+      cs_insert(result,(unsigned char)min);
+    return;
+  case &Lit(x):
+    let len = strlen(x);
+    if (len > 0) {
+      let c = x[len-1];
+      cs_insert(result,toupper(c));
+      cs_insert(result,tolower(c));
+    }
+    return;
+  case &Minus(_,_):
+    eprintf( "Internal error: last is applied to Minus\n");
+    return;
+  case &Prose(x):
+//    eprintf("Warning: cannot determine the LAST characters of prose:\n"
+//            "<%s>\n",
+//            x);
+    return;
+  case &Symb(x,_):
+    let rngptr = Hashtable::lookup_opt(globals->lastt,new x);
+    if (rngptr) cs_union(result,*rngptr);
+    return;
+  case &Seq(r2,r3):
+    last(result,r3);
+    if (empty_rule(r3)) last(result,r2);
+    return;
+  case &Alt(r2,r3):
+    last(result,r2);
+    last(result,r3);
+    return;
+  case &Opt(r2):
+    last(result,r2);
+    return;
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    last(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    last(result,r2);
+    return;
+  }
+}
+
+void init_lastt(grammar_t grm) {
+  if (!globals) reset_globals();
+  if (globals->lastt) return;
+  init_maybe_empty(grm);
+  let graph = Graph::empty(strptrcmp);
+  for (let t = grm; t; t = t->tl) {
+    let result = new mset { EMPTYSET };
+    let &$(n,r,_) = t->hd;
+    right_rule(result,r);
+    graph = Graph::add_edges(graph,new n,result->s);
+  }
+  graph = Graph::tc(graph);
+  /* Now, (A,B) in graph iff B appears at the right of a derivation from A */
+  globals->lastt = EMPTYTABLE;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let rng = cs_empty();
+    last(rng,r);
+    Hashtable::insert(globals->lastt,new n,rng);
+  }
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    let rng = Hashtable::lookup(globals->lastt,nptr);
+    let targets = Graph::get_targets(graph,nptr);
+    while (Set::cardinality(targets) > 0) {
+      let x = Set::choose(targets);
+      targets = Set::delete(targets,x);
+      let rngptr = Hashtable::lookup_opt(globals->lastt,x);
+      if (rngptr) /* missing symbols possible if they are not defined by the grammar */
+	cs_union(rng,*rngptr);
+      /*
+      else
+	eprintf("Internal error: bad lookup on %s in report_last\n",*x);
+      */
+    }
+  }
+}
+
+/*************************** WHITE EDGES ***************************/
+
+void init_white_edge_symbols(grammar_t grm) {
+  init_firstt(grm);
+  init_lastt(grm);
+  if (globals->white_edge_symbols) return;
+  let ws = string2cs(" \t\r\n");
+  let N = EMPTYSET;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    // cs_dup because cs_intersect works by side effect
+    let rng1 = cs_dup(Hashtable::lookup(globals->firstt,nptr));
+    let rng2 = cs_dup(Hashtable::lookup(globals->lastt,nptr));
+    cs_intersect(rng1,ws);
+    cs_intersect(rng2,ws);
+    if (is_cs_empty(rng1) && is_cs_empty(rng2)) continue;
+    N = Set::insert(N,nptr);
+  }
+  globals->white_edge_symbols = N;
+}
+void report_white_edges(grammar_t grm) {
+  init_white_edge_symbols(grm);
+
+  let ws = string2cs(" \t\r\n");
+  //  let ws = string2cs(" ");
+  let L = EMPTYSET;
+  let R = EMPTYSET;
+  let B = EMPTYSET;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    // cs_dup because cs_intersect works by side effect
+    let rng1 = cs_dup(Hashtable::lookup(globals->firstt,nptr));
+    let rng2 = cs_dup(Hashtable::lookup(globals->lastt,nptr));
+    cs_intersect(rng1,ws);
+    cs_intersect(rng2,ws);
+    if (is_cs_empty(rng1)) {
+      if (is_cs_empty(rng2)) continue;
+      R = Set::insert(R,nptr);
+    }
+    else {
+      if (is_cs_empty(rng2)) L = Set::insert(L,nptr);
+      else B = Set::insert(B,nptr);
+    }
+  }
+  if (Set::is_empty(L))
+    eprintf("No symbols have only left white edges.\n");
+  else {
+    eprintf("%d symbols have only left white edges:\n",Set::cardinality(L));
+    while (Set::cardinality(L) > 0) {
+      let x = Set::choose(L);
+      L = Set::delete(L,x);
+      eprintf("%s\n",*x);
+    }
+  }
+  if (Set::is_empty(R))
+    eprintf("No symbols have only right white edges.\n");
+  else {
+    eprintf("%d symbols have only right white edges:\n",Set::cardinality(R));
+    while (Set::cardinality(R) > 0) {
+      let x = Set::choose(R);
+      R = Set::delete(R,x);
+      eprintf("%s\n",*x);
+    }
+  }
+  if (Set::is_empty(B))
+    eprintf("No symbols have left and right white edges.\n");
+  else {
+    eprintf("%d symbols have left and right white edges:\n",Set::cardinality(B));
+    while (Set::cardinality(B) > 0) {
+      let x = Set::choose(B);
+      B = Set::delete(B,x);
+      eprintf("%s\n",*x);
+    }
+  }
+}
+int white_edge_symbol(str_t s) {
+  if (!globals || !globals->white_edge_symbols) return 0;
+  return Set::member(globals->white_edge_symbols,s);
+}
+
+
+/****************************** FOLLOW ******************************/
+
+static cs_t follow(rule_t r, cs_t first_right) {
+  switch (r->r) {
+  case &CharRange(_,_):
+  case &Lit(_):
+  case &Minus(_,_):
+  case &Prose(_):
+    return first_right;
+  case &Symb(x,_):
+    let xptr = new x;
+    let rngptr = Hashtable::lookup_opt(globals->followt, xptr);
+    if (rngptr) {
+      let rng = cs_dup(*rngptr);
+      cs_union(rng,first_right);
+      return rng;
+    }
+    else
+      return first_right;
+  case &Seq(r2,r3):
+    let rng = follow(r3,first_right);
+    if (empty_rule(r3))
+      return follow(r2,rng);
+    else
+      return rng;
+  case &Alt(r2,r3):
+    first_right = follow(r2,first_right);
+    return follow(r3,first_right);
+  case &Opt(r2):
+    return follow(r2,first_right);
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    return follow(r2,first_right);
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return first_right;
+  case &Star(_,&Num(1),r2): fallthru(r2);
+  case &Hash(_,&Num(1),r2):
+    return follow(r2,first_right);
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    return follow(r2,first_right);
+  }
+}
+
+typedef struct Hashtable::Table<const char ?@,rule_t,`H> @rule_table_t;
+static void follow_grammar0(rule_table_t rt, rule_t r, rule_t right_ctxt) {
+  switch (r->r) {
+  case &Symb(n,_):
+    let nptr = new n;
+    let ruleptr = Hashtable::lookup_opt(rt,nptr);
+    if (ruleptr) {
+      Hashtable::remove(rt,nptr);
+      Hashtable::insert(rt,nptr,ALT(*ruleptr,right_ctxt));
+    }
+    else {
+      Hashtable::insert(rt,nptr,right_ctxt);
+    }
+    return;
+  case &Seq(r2,r3):
+    follow_grammar0(rt,r2,SEQ(r3,right_ctxt));
+    follow_grammar0(rt,r3,right_ctxt);
+    return;
+  case &Alt(r2,r3):
+    follow_grammar0(rt,r2,right_ctxt);
+    follow_grammar0(rt,r3,right_ctxt);
+    return;
+  case &Opt(r2):
+    follow_grammar0(rt,r2,right_ctxt);
+    return;
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    follow_grammar0(rt,r2,right_ctxt);
+    return;
+  case &Star(m,N,r2):
+    if (repeat_zero(N)) return;
+    let m2 = 0; // a little tricky...
+    let N2 = minus_one(N);
+    if (repeat_zero(N2))
+      follow_grammar0(rt,r2,right_ctxt);
+    else
+      follow_grammar0(rt,r2,SEQ(STAR(m2,N2,r2),right_ctxt));
+    return;
+  case &Hash(m,N,r2):
+    let m2 = 0; // a little tricky...
+    let N2 = minus_one(N);
+    let r3 = SEQ(r2,STAR(m2,N2,SEQ(commas(),r2)));
+    // NB: turns out these are effectively the same
+    //    if (m == 0)
+    //      follow_grammar0(rt,new Opt(r3),right_ctxt);
+    //    else
+    follow_grammar0(rt,r3,right_ctxt);
+    return;
+  case &Prose(_):
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  }
+}
+
+const char ?follow_symbol(const char ?n) {
+  return (const char ?)aprintf("FOLLOW_%s",n);
+}
+
+int is_follow_symbol(const char ?n) {
+  return strncmp(n,"FOLLOW_",7) == 0;
+}
+
+static grammar_t acc = NULL;
+static void get_follow(const char ?@n, rule_t r) {
+  acc = new List::List(new $(follow_symbol(*n),r,Attr(0,0,NULL,NULL)),acc);
+}
+grammar_t follow_grammar(grammar_t grm) {
+  rule_table_t rt = EMPTYTABLE;
+  for (let x = grm; x; x = x->tl) {
+    let &$(n,r,_) = x->hd;
+    let fn = follow_symbol(n);
+//     eprintf("following %s\n",fn); fflush(stderr);
+    follow_grammar0(rt,r,SYMB(fn));
+  }
+  acc = NULL;
+  Hashtable::iter(get_follow,rt);
+  let result = acc;
+  acc = NULL;
+  /* If n is defined but not used (e.g., an unused start symbol)
+     then there won't be an entry for the follow set of n,
+     so make it the empty string. */
+  for (let x = grm; x; x = x->tl) {
+    let &$(n,r,_) = x->hd;
+    if (Hashtable::lookup_opt(rt,new n)) continue;
+    let fn = follow_symbol(n);
+    result = new List::List(new $(fn,LIT(""),Attr(0,0,NULL,NULL)), result);
+  }
+  return result;
+}
+
+static void init_followt(grammar_t grm) {
+  if (!globals) reset_globals();
+  if (globals->followt) return;
+  cs_table_opt_t save = globals->firstt;
+  globals->firstt = NULL; // need to reset this so init_firstt works
+  grammar_t followgrm = follow_grammar(grm);
+  init_firstt(List::append(grm,followgrm));
+  globals->followt = globals->firstt;
+  globals->firstt = save;
+}
+
+void report_first_follow(grammar_t grm) {
+  init_firstt(grm);
+  init_followt(grm);
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    let firstrng = Hashtable::lookup(globals->firstt,nptr);
+    let followrng = Hashtable::lookup(globals->followt,new follow_symbol(n));
+    eprintf("FIRST (%s)   = ",n);
+    cs_print(stderr,firstrng);
+    eprintf("\n");
+    eprintf("FOLLOW(%s)   = ",n);
+    cs_print(stderr,followrng);
+    eprintf("\n");
+  }
+}
+
+/******************************* MUST *******************************/
+/* What non-terminals must appear in a rule; needs transitive closure */
+static void must_rule0(mset_t result, rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    result->s = Set::insert(result->s,new x);
+    return;
+  case &Prose(_):
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  case &Seq(r2,r3):
+    must_rule0(result,r2);
+    must_rule0(result,r3);
+    return;
+  case &Alt(r2,r3):
+    let res2 = new mset { EMPTYSET };
+    let res3 = new mset { EMPTYSET };
+    must_rule0(res2,r2);
+    must_rule0(res3,r3);
+    result->s = Set::union_two(result->s,Set::intersect(res2->s,res3->s));
+    return;
+  case &Opt(r2):
+    must_rule0(result,r2);
+    return;
+  case &Rcount(_,r2):
+    // FIX: approximation, can't know whether count is 0
+    must_rule0(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(m,_,r2): fallthru(m,r2);
+  case &Hash(m,_,r2):
+    if (m > 0) must_rule0(result,r2);
+    return;
+  }
+}
+static void must_rule(cs_t result, rule_t r) {
+  switch (r->r) {
+  case &CharRange(_,_):
+    return;
+  case &Lit(x): // FIX: how to deal with case insensitive literals?
+    let len = strlen(x);
+    for (let i=0; i < len; i++)
+      cs_insert(result,x[i]);
+    return;
+    return;
+  case &Symb(x,_):
+    let rngptr = Hashtable::lookup_opt(globals->mustt,new x);
+    if (rngptr) cs_union(result,*rngptr);
+    return;
+  case &Prose(_):
+  case &Minus(_,_):
+    return;
+  case &Seq(r2,r3):
+    must_rule(result,r2);
+    must_rule(result,r3);
+    return;
+  case &Alt(r2,r3):
+    let res2 = cs_empty();
+    let res3 = cs_empty();
+    must_rule(res2,r2);
+    must_rule(res3,r3);
+    cs_intersect(res2,res3);
+    cs_union(result,res2);
+    return;
+  case &Opt(_):
+    return;
+  case &Rcount(_,_):
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(m,_,r2):
+    if (m > 0) must_rule(result,r2);
+    return;
+  case &Hash(m,_,r2):
+    if (m > 0) must_rule(result,r2);
+    if (m > 1) cs_insert(result,',');
+    return;
+  }
+}
+/* Initializes globals->mustt */
+void init_mustt(grammar_t grm) {
+  if (!globals) reset_globals();
+  if (globals->mustt) return;
+  let graph = Graph::empty(strptrcmp);
+  for (let t = grm; t; t = t->tl) {
+    let result = new mset { EMPTYSET };
+    let &$(n,r,_) = t->hd;
+    must_rule0(result,r);
+    graph = Graph::add_edges(graph,new n,result->s);
+  }
+  graph = Graph::tc(graph);
+  /* Now, (A,B) in graph iff B must appear in a derivation from A */
+  globals->mustt = EMPTYTABLE;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let rng = cs_empty();
+    must_rule(rng,r);
+    Hashtable::insert(globals->mustt,new n,rng);
+  }
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    let rng = Hashtable::lookup(globals->mustt,nptr);
+    let targets = Graph::get_targets(graph,nptr);
+    while (Set::cardinality(targets) > 0) {
+      let x = Set::choose(targets);
+      targets = Set::delete(targets,x);
+      let rngptr = Hashtable::lookup_opt(globals->mustt,x);
+      if (rngptr) /* missing symbols possible if they are not defined by the grammar */
+	cs_union(rng,*rngptr);
+    }
+  }
+}
+
+
+/******************************* MAY *******************************/
+/* What non-terminals may appear in a rule; needs transitive closure */
+static void may_rule0(mset_t result, rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    result->s = Set::insert(result->s,new x);
+    return;
+  case &Prose(_):
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  case &Seq(r2,r3):
+    may_rule0(result,r2);
+    may_rule0(result,r3);
+    return;
+  case &Alt(r2,r3):
+    may_rule0(result,r2);
+    may_rule0(result,r3);
+    return;
+  case &Opt(r2):
+    may_rule0(result,r2);
+    return;
+  case &Rcount(_,r2):
+    may_rule0(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    may_rule0(result,r2);
+    return;
+  }
+}
+static void may_rule(cs_t result, rule_t r) {
+  switch (r->r) {
+  case &CharRange(min,max):
+    for (; min <= max; min++)
+      cs_insert(result,(unsigned char)min);
+    return;
+  case &Lit(x):
+    let len = strlen(x);
+    for (let i=0; i < len; i++) {
+      let c = x[i];
+      cs_insert(result,toupper(c));
+      cs_insert(result,tolower(c));
+    }
+    return;
+  case &Symb(x,_):
+    let rngptr = Hashtable::lookup_opt(globals->mayt,new x);
+    if (rngptr) cs_union(result,*rngptr);
+    return;
+  case &Prose(_):
+  case &Minus(_,_):
+    return;
+  case &Seq(r2,r3):
+    may_rule(result,r2);
+    may_rule(result,r3);
+    return;
+  case &Alt(r2,r3):
+    may_rule(result,r2);
+    may_rule(result,r3);
+    return;
+  case &Opt(r2):
+    may_rule(result,r2);
+    return;
+  case &Rcount(_,r2):
+    may_rule(result,r2);
+    return;
+  case &Star(_,&Num(0),_):
+  case &Hash(_,&Num(0),_):
+    return;
+  case &Star(_,_,r2): fallthru(r2);
+  case &Hash(_,_,r2):
+    may_rule(result,r2);
+    return;
+  }
+}
+void init_mayt(grammar_t grm) {
+  if (!globals) reset_globals();
+  if (globals->mayt) return;
+  let graph = Graph::empty(strptrcmp);
+  for (let t = grm; t; t = t->tl) {
+    let result = new mset { EMPTYSET };
+    let &$(n,r,_) = t->hd;
+    may_rule0(result,r);
+    graph = Graph::add_edges(graph,new n,result->s);
+  }
+  graph = Graph::tc(graph);
+  /* Now, (A,B) in graph iff B may appear in a derivation from A */
+  globals->mayt = EMPTYTABLE;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let rng = cs_empty();
+    may_rule(rng,r);
+    Hashtable::insert(globals->mayt,new n,rng);
+  }
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    let rng = Hashtable::lookup(globals->mayt,nptr);
+    let targets = Graph::get_targets(graph,nptr);
+    while (Set::cardinality(targets) > 0) {
+      let x = Set::choose(targets);
+      targets = Set::delete(targets,x);
+      let rngptr = Hashtable::lookup_opt(globals->mayt,x);
+      if (rngptr) /* missing symbols possible if they are not defined by the grammar */
+	cs_union(rng,*rngptr);
+    }
+  }
+}
+
+/* ARITY */
+/*
+  arity calculation
+  idea: some Symbs have zero arity.
+  These are Symb defined in terms of Lit, CharRange, Seq,
+  and zero arity Symbs.
+  NOTE: least fixed point, two Symbs defined as each other are not zero arity.
+   This is actually a degenerate case, as such Symbs would not define finite
+   strings.  You would need an Alt above each Symb for this to work,
+   and that would cut off the arity computation.
+  All other Symbs have nonzero arity.
+  Now in defining the arity of a rule, handle zero arity Symbs
+  as contributing 0 to the arity of the rule, and nonzero-arity Symbs as
+  contributing 1.
+  So phase 1: determine maybe-zero-arity Symbs.
+    Some symbols are definitely zero arity.
+    Some are definitely not zero arity.
+    Some are zero arity IF some Symbs are zero arity.
+  Make an arity-depends graph.
+    If the graph has cycles those Symbs are no good.
+    So it has to be acyclic.
+    Determine leaf arity.
+    Then determine arity of others.
+    I.e., do a topological sort.
+ */
+static
+strgraph_t get_depend_arity(strgraph_t g, str_t n, rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    let xptr = new x;
+    g = Graph::add_node(g,xptr);
+    g = Graph::add_edge(g,n,xptr);
+    break;
+  case &Minus(r2,r3): fallthru(r2,r3);
+  case &Seq(r2,r3):
+    g = get_depend_arity(g,n,r2);
+    g = get_depend_arity(g,n,r3);
+    break;
+  case &Prose(_):
+  case &CharRange(_,_):
+  case &Lit(_):
+  case &Alt(_,_):
+  case &Opt(_):
+  case &Rcount(_,_):
+  case &Star(_,_,_):
+  case &Hash(_,_,_):
+    break;
+  }
+  return g;
+}
+static
+strgraph_t arity_graph(grammar_t ds) {
+  let g = Graph::empty(strptrcmp);
+  for (let x = ds; x; x = x->tl) {
+    let &$(n,r,_) = x->hd;
+    let nptr = new n;
+    g = Graph::add_node(g,nptr);
+    g = get_depend_arity(g,nptr,r);
+  }
+  return g;
+}
+unsigned int arity_rule(rule_t r) {
+  switch (r->r) {
+  case &Symb(x,_):
+    let arity_opt = Hashtable::lookup_opt(globals->arityt,new x);
+    if (arity_opt) return (*arity_opt)?1:0;
+    warn("Undefined arity for %s\n",x);
+    return 1;
+  case &Star(m,&Num(n),r2):
+    return ((m==n) && (arity_rule(r2) == 0)) ? 0 : 1;
+  case &Alt(_,_):
+  case &Opt(_):
+  case &Rcount(_,_):
+  case &Star(_,_,_):
+  case &Hash(_,_,_):
+    return 1;
+  case &CharRange(min,max):
+    return (min == max)?0:1;
+  case &Lit(_):
+    return 0;
+  case &Seq(r2,r3): /* The interesting one */
+    return arity_rule(r2)+arity_rule(r3);
+  case &Prose(_): /* Should have been handled elsewhere */
+    warn("Unexpected Prose in arity_rule\n");
+    return 0;
+  case &Minus(_,_): /* Should have been handled elsewhere */
+    warn("Unexpected Minus in arity_rule\n");
+    return 0;
+  }
+}
+
+void set_arity_symb(const char ?`H symb, unsigned int arity){
+  Hashtable::insert(globals->arityt,new symb, arity);
+}
+
+void init_arityt(grammar_t ds) {
+  if (!globals) reset_globals();
+  if (globals->arityt) return;
+  globals->arityt = EMPTYTABLE;
+
+  let g = arity_graph(ds);
+  let in_order = Graph::tsort(g);
+  in_order = List::imp_rev(in_order);
+
+  /* FIX: N squared */
+  for (let x = in_order; x; x = x->tl) {
+    let &n = x->hd;
+    let found = 0;
+    for (let y = ds; y; y = y->tl) {
+      let &$(m,r,_) = y->hd;
+      if (strcmp(n,m) != 0) continue;
+      let arity = arity_rule(r);
+      Hashtable::insert(globals->arityt,new n,arity);
+      found = 1;
+      break;
+    }
+    if (!found) internal_err("Can't find symbol %s in init_arityt\n",n);
+  }
+}
+
+/**************************** CONFLICTS ****************************/
+/*
+ * SLR conflict analysis:
+ * Create earley-like NFA, but with only epsilons, no calls.
+ * Determinize NFA.
+ * foreach final state in DFA
+ *    compare outgoing transitions with FOLLOW of the symbols for which
+ *    the state is final, and intersect FOLLOWS. In non-zero intersection
+ *    in former, then shift-reduce, in latter reduce-reduce, else none.
+ * 
+ */
+
+void SLR_analyze_final_state(string_t nonterm, grammar_t grm, dfa_t dfa, 
+                             Earley::symb_info_t symb_info, st_t f)
+{
+  let transitions = Axarray::get(dfa->states,f);
+  cs_t cs_trans = cs_empty();
+  if (transitions){ 
+    // Build cs of transitions.
+    let lb = transitions->lb;
+    for (let spans = transitions->spans; spans; spans = spans->tl) {
+      let ub = spans->hd->ub;
+      let target = spans->hd->target;
+      if (target) { /* Don't print transitions to dead state 0 */
+        cs_union(cs_trans,cs_range(lb,ub));
+      }
+      lb = ub;
+    } 
+  }
+  
+  let spantree = dfa_spantree(dfa);
+
+  // Get set of attributes. Convert to list.
+  let attr_set = Hashtable::lookup(dfa->final_attrs, f);
+  let attrs = Set::to_list(attr_set);
+  cs_opt_t cs_all_follow = cs_empty();
+  // Foreach attribute, lookup FOLLOW set and intersect.
+  for (; attrs; attrs = attrs->tl){
+    let symb = Earley::act2symb(attrs->hd, symb_info->action_symb_table);
+    let follow_symb = follow_symbol(symb);
+    let cs_follow = cs_empty();
+    first(cs_follow, SYMB(follow_symb));
+    // arg: follows_table
+    //let cs_follow_list = Hashtable::lookup(follows_table, attrs->hd);
+    
+    // for each cs_follow in cs_follow_list, run the following checks:
+    // for (....)
+    if (transitions) { // shift-reduce conflict possible
+      let cs_shift_reduce = cs_dup(cs_follow);
+      cs_intersect(cs_shift_reduce, cs_trans);
+      if (!is_cs_empty(cs_shift_reduce)){
+        eprintf("************************************************************************\n");
+        num_conflicts_slr++;
+        eprintf("Shift-reduce conflict %u in symbol-use %s in definition %s. State = %d.\n",num_conflicts_slr,symb,nonterm, f);
+        eprintf("SLR conflict on character(s) ");
+        cs_print(stderr,cs_shift_reduce);
+        eprintf("\n");
+        eprintf("Example: ");
+        lr_dfa_example(stderr,dfa,spantree,f, Earley::act2symb, symb_info->action_symb_table, 0,1);
+      }
+    }
+    
+    let cs_reduce_reduce = cs_dup(cs_follow); 
+    cs_intersect(cs_reduce_reduce, cs_all_follow);
+    if (!is_cs_empty(cs_reduce_reduce)){
+      eprintf("************************************************************************\n");
+      num_conflicts_slr++;
+      eprintf("Reduce-reduce conflict %u in symbol-use %s in definition %s. State = %d.\n",num_conflicts_slr,symb,nonterm,f);
+      eprintf("SLR conflict on character(s) ");
+      cs_print(stderr,cs_reduce_reduce);
+      eprintf("\n");        
+      lr_dfa_example(stderr,dfa,spantree,f, Earley::act2symb, symb_info->action_symb_table, 0,1);
+    }
+    
+    cs_union(cs_all_follow, cs_follow);
+  }
+}
+
+
+void LR1_analyze_final_state(string_t nonterm, grammar_t grm, dfa_t dfa, 
+                             Earley::symb_info_t symb_info, st_t f,
+                             /***/ Hashtable::table_t<act_t, List::list_t<cs_t>> follows_table)
+{
+  let transitions = Axarray::get(dfa->states,f);
+  cs_t cs_trans = cs_empty();
+  if (transitions){ 
+    // Build cs of transitions.
+    let lb = transitions->lb;
+    for (let spans = transitions->spans; spans; spans = spans->tl) {
+      let ub = spans->hd->ub;
+      let target = spans->hd->target;
+      if (target) { /* Don't print transitions to dead state 0 */
+        cs_union(cs_trans,cs_range(lb,ub));
+      }
+      lb = ub;
+    } 
+  }
+  
+  let spantree = dfa_spantree(dfa);
+  
+  // Get set of attributes. Convert to list.
+  let attr_set = Hashtable::lookup(dfa->final_attrs, f);
+  let attrs = Set::to_list(attr_set);
+  let cs_all_follow = cs_empty();
+  // Foreach attribute, lookup FOLLOW set and intersect.
+  for (; attrs; attrs = attrs->tl){
+    let symb = Earley::act2symb(attrs->hd, symb_info->action_symb_table);
+    let cs_follow_list = Hashtable::lookup(follows_table, attrs->hd);
+
+    // Each follow set represents a different occurence of the symb at the same position.
+    // So, we treat them semi-independently. For shift-reduce conflicts, we analyze them independently,
+    // rather than merging them together into one CS.
+    // However, for the purpose of reduce-reduce conflicts, they are not independent. In particular,
+    // they don't reduce-reduce conflict with each other. So, for r-r conflicts, we compare the union of all the follows
+    // with cs_all_follow.
+    
+    /** The union of all follow sets for symb. */
+    let cs_symb_follow = cs_empty();
+    for (; cs_follow_list; cs_follow_list = cs_follow_list->tl){
+      let cs_follow = cs_follow_list->hd;
+      
+      if (transitions) { // shift-reduce conflict possible
+        let cs_shift_reduce = cs_dup(cs_follow);
+        cs_intersect(cs_shift_reduce, cs_trans);
+        if (!is_cs_empty(cs_shift_reduce)){
+          eprintf("************************************************************************\n");
+          /***/
+          num_conflicts_lr1++;
+          eprintf("Shift-reduce conflict %u in symbol-use %s in definition %s. State = %d.\n",num_conflicts_lr1,symb,nonterm, f);
+          eprintf("LR(1) conflict on character(s) ");
+          cs_print(stderr,cs_shift_reduce);
+          eprintf("\n");
+          eprintf("Example: ");
+          lr_dfa_example(stderr,dfa,spantree,f, Earley::act2symb, symb_info->action_symb_table, 0,1);
+        }
+      }
+
+      cs_union(cs_symb_follow, cs_follow);      
+    }
+    let cs_reduce_reduce = cs_dup(cs_symb_follow); 
+    cs_intersect(cs_reduce_reduce, cs_all_follow);
+    if (!is_cs_empty(cs_reduce_reduce)){
+      eprintf("************************************************************************\n");
+      /***/
+      num_conflicts_lr1++;
+      eprintf("Reduce-reduce conflict %u in symbol-use %s in definition %s. State = %d.\n",num_conflicts_lr1,symb,nonterm,f);
+      eprintf("LR(1) conflict on character(s) ");
+      cs_print(stderr,cs_reduce_reduce);
+      eprintf("\n");        
+      lr_dfa_example(stderr,dfa,spantree,f, Earley::act2symb, symb_info->action_symb_table, 0,1);
+    }
+    
+    cs_union(cs_all_follow, cs_symb_follow);
+  }
+}
+
+void report_SLR_conflicts_sym0(string_t sym, grammar_t<`H> grm, rule_t r, int inline_cs){
+  eprintf("Converting rule to LR machine:\n");
+  let $(slr_dfa, final_states, final_follows, symb_info) = Earley::rule2LR(grm, r, LIT(""), 1, inline_cs);
+  eprintf("Analyzing DFA for SLR conflicts:\n");
+  let fs = Set::to_list(slr_dfa->final_states);
+  for (; fs; fs = fs->tl){
+    SLR_analyze_final_state(sym, grm, slr_dfa, symb_info, fs->hd);
+  }
+}
+
+void report_LR1_conflicts_sym0(string_t sym, grammar_t<`H> grm, rule_t r, rule_t right_context, int inline_cs){
+  eprintf("Converting rule to LR machine:\n");
+  let $(slr_dfa, final_states, final_follows, symb_info) = 
+    Earley::rule2LR(grm, r, right_context, 0, inline_cs);  // tell it not to minimize the DFA so as not to merge final states w/ different follow sets.
+  eprintf("Analyzing DFA for LR(1) conflicts:\n");
+  let fs = Set::to_list(slr_dfa->final_states);
+  for (; fs; fs = fs->tl){
+    let follows = Hashtable::lookup(final_follows, fs->hd);
+    LR1_analyze_final_state(sym, grm, slr_dfa, symb_info, fs->hd, follows);
+  }
+}
+
+static
+void conflicts0(string_t,rule_t,rule_t);
+
+static
+void conflicts_alt(string_t nonterm, rule_t r,rule_t right_ctxt) {
+  /* Same as conflicts0, but don't report Alt conflicts; only called
+     by conflicts0 when the Alt conflicts have already been reported */
+  switch (r->r) {
+  case &Alt(r2,r3):
+    conflicts_alt(nonterm, r2,right_ctxt);
+    conflicts_alt(nonterm, r3,right_ctxt);
+    return;
+  default:
+    conflicts0(nonterm, r,right_ctxt);
+    return;
+  }
+}
+
+static grammar_t checking_conflicts_grammar;
+
+// argument nonterm is the name of the nonterminal currently being processed.
+static
+void conflicts0(string_t nonterm, rule_t r,rule_t right_ctxt) {
+  switch (r->r) {
+  case &Seq(r2,r3):
+    conflicts0(nonterm,r2,SEQ(r3,right_ctxt));
+    conflicts0(nonterm,r3,right_ctxt);
+    return;
+  case &Alt(r2,r3):
+    let rng_all = cs_empty();
+    let rng_conflict = cs_empty();
+
+    let alts = alt2rules(r);
+    for (let rs = alts; rs; rs = rs->tl) {
+      let rng = cs_empty();
+      first(rng,SEQ(rs->hd,right_ctxt));
+      let rng2 = cs_dup(rng);
+      cs_intersect(rng2,rng_all);
+      cs_union(rng_conflict,rng2);
+      cs_union(rng_all,rng);
+    }
+    if (!is_cs_empty(rng_conflict)) {
+      /* an LL(1) conflict */
+      eprintf("************************************************************************\n");
+      num_conflicts_ll++;
+      eprintf("Conflict %u in symbol definition %s.\n",num_conflicts_ll,nonterm);
+      eprintf("LL(1) conflict on character(s) ");
+      cs_print(stderr,rng_conflict);
+      eprintf(" in Alt\n  ");
+      pr_rule(stderr,SEQ(r,right_ctxt),0);
+      int altnum = 1;
+      for (let x = alts; x; x = x->tl) {
+        eprintf("\nAlternative %d: ",altnum++);
+        pr_rule(stderr,x->hd,0);
+      }
+      eprintf("\nRight context: ");
+      pr_rule(stderr,right_ctxt,0);
+      eprintf("\n");
+      lookahead_dfa(checking_conflicts_grammar,alts,right_ctxt);
+    }
+    conflicts_alt(nonterm,r2,right_ctxt);
+    conflicts_alt(nonterm,r3,right_ctxt);
+    return;
+  case &Opt(r2):
+    let rng2 = cs_empty();
+    let rng3 = cs_empty();
+    first(rng2,SEQ(r2,right_ctxt));
+    first(rng3,right_ctxt);
+    cs_intersect(rng2,rng3);
+    if (!is_cs_empty(rng2)) {
+      /* an LL(1) conflict */
+      eprintf("************************************************************************\n");
+      num_conflicts_ll++;
+      eprintf("Conflict %u in symbol definition %s.\n",num_conflicts_ll,nonterm);
+      eprintf("LL(1) conflict on character(s) ");
+      cs_print(stderr,rng2);
+      eprintf(" in Opt\n  ");
+      pr_rule(stderr,SEQ(r,right_ctxt),0);
+      eprintf("\n");
+      eprintf("Alternative 1: ");
+      pr_rule(stderr,r2,0);
+      eprintf("\nAlternative 2: ");
+      pr_rule(stderr,LIT(""),0);
+      eprintf("\nRight context: ");
+      pr_rule(stderr,right_ctxt,0);
+      eprintf("\n");
+      lookahead_dfa(checking_conflicts_grammar,
+		    List::list(r2,LIT("")), // r2 first because greedy says try r2, only if fail assume ""
+		    right_ctxt);
+    }
+    conflicts0(nonterm,r2,right_ctxt);
+    return;
+  case &Rcount(_,r2):
+    // FIX: we are assuming here a greedy parse
+    return;
+  case &Star(m,&Num(0),r2): return;
+  case &Star(m,&Num(n),r2):
+    if (m > n) return;
+    if (m == n) return; /* No choice involved */
+    conflicts0(nonterm,OPT(r2),right_ctxt);
+    return;
+  case &Star(m,&Infinity,r2):
+    conflicts0(nonterm,OPT(r2),right_ctxt);
+    return;
+  case &Hash(m,N,r2):
+    // FIX: not right.  r2 must be preceeded by comma...
+    if (repeat_zero(N)) return;
+    conflicts0(nonterm,OPT(r2),right_ctxt);
+    return;
+  case &Symb(_,_):
+  case &Prose(_):
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  }
+}
+
+void report_conflicts_sym(string_t sym, grammar_t<`H> grm, unsigned int grm_class, int inline_cs){
+  reset_globals();
+
+  if (inline_cs)
+    cs_optimize(grm);
+  
+  //  checking_conflicts_grammar = grm;
+  grammar_t followgrm = follow_grammar(grm);
+  grammar_t combinedgrm = List::append(grm,followgrm);
+  checking_conflicts_grammar = combinedgrm;
+  init_recursive(combinedgrm);
+  init_firstt(combinedgrm);
+  init_mayt(combinedgrm);
+  init_mustt(combinedgrm);
+  init_maybe_empty(combinedgrm);
+  if (sym){
+    for (let x = grm; x; x = x->tl) {
+      let &$(n,r,_) = x->hd;
+      if (!strcmp(n,sym)) {
+        let fn = follow_symbol(n);
+        if (grm_class & LL_GRM_CLASS)
+          conflicts0(n, r,SYMB(fn));
+        if (grm_class & SLR_GRM_CLASS)
+          report_SLR_conflicts_sym0(sym, grm, r, inline_cs);
+        if (grm_class & LR1_GRM_CLASS)
+          report_LR1_conflicts_sym0(sym, grm, r, SYMB(fn), inline_cs);
+        break;
+      }
+    }
+  }else {
+    for (let x = grm; x; x = x->tl) {
+      let &$(n,r,_) = x->hd;
+      let fn = follow_symbol(n);
+      if (grm_class & LL_GRM_CLASS)
+        conflicts0(n, r,SYMB(fn));
+      if (grm_class & SLR_GRM_CLASS)
+        report_SLR_conflicts_sym0(n, grm, r, inline_cs);
+      if (grm_class & LR1_GRM_CLASS)
+        report_LR1_conflicts_sym0(n, grm, r, SYMB(fn), inline_cs);
+    }
+  }
+  if (num_conflicts_ll == 1)
+    printf("There was 1 LL(1) conflict\n");
+  else
+    printf("There were %u LL(1) conflicts\n", num_conflicts_ll);
+  if (num_conflicts_dfa == 1)
+    printf("There was 1 conflict in the dfas\n");
+  else if (num_conflicts_dfa > 1)
+    printf("There were %u conflicts in the dfas\n", num_conflicts_dfa);
+  if (num_conflicts_resolved == 1)
+    printf("  1 was resolved\n");
+  else
+    printf("  %u were resolved\n",num_conflicts_resolved);
+  if (num_conflicts_unresolved == 1)
+    printf("  1 was unresolved\n");
+  else
+    printf("  %u were unresolved\n",num_conflicts_unresolved);
+  if (num_conflicts_unbounded == 1)
+    printf("  1 conflicts might require unbounded lookahead\n");
+  else
+    printf("  %u conflicts might require unbounded lookahead\n",num_conflicts_unbounded);
+  if (num_conflicts_change_order == 1)
+    printf("  1 conflict was out of order\n");
+  else if (num_conflicts_change_order)
+    printf("  %u conflicts were out of order\n",num_conflicts_change_order);
+  
+  if (num_conflicts_slr == 1)
+    printf("\nThere was 1 SLR conflict\n");
+  else
+    printf("\nThere were %u SLR conflicts\n", num_conflicts_slr);
+
+  if (num_conflicts_lr1 == 1)
+    printf("\nThere was 1 LR1 conflict\n");
+  else
+    printf("\nThere were %u LR1 conflicts\n", num_conflicts_lr1);
+}
+
+void report_conflicts(grammar_t<`H> grm, unsigned int grm_class, int inline_cs) {
+  report_conflicts_sym(NULL, grm, grm_class, inline_cs);
+}
+
+void report_whitespace(grammar_t<`H> grm) {
+  /* Divide the symbols defined by the grammar into levels.
+   * Level 2 symbols are defined by rules that use implicit whitespace.
+   * Level 1 symbols are used to define level 2 symbols, but are not themselves
+   * defined by rules with implicite whitespace.
+   * Level 0 are the rest.
+   */
+  let level2 = EMPTYSET;
+  let level1 = EMPTYSET;
+  let all = EMPTYSET;
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,a) = t->hd;
+    let nptr = new n;
+    all = Set::insert(all,nptr);
+    if (a.ws) {
+      level2 = Set::insert(level2,nptr);
+      let fv = freevars_rule(r);
+      level1 = Set::union_two(level1,fv);
+    }
+  }
+  level1 = Set::diff(level1,level2);
+  let level0 = Set::diff(Set::diff(all,level2),level1);
+  eprintf("******** WHITESPACE ANALYSIS\n");
+  eprintf("Level 2 symbols:"); fprint_strset(stderr,level2);
+  eprintf("Level 1 symbols:"); fprint_strset(stderr,level1);
+  eprintf("Level 0 symbols:"); fprint_strset(stderr,level0);
+  /* Sanity check: a symbol is not defined in terms of a higher-level symbol. */
+  for (let t = grm; t; t = t->tl) {
+    let &$(n,r,_) = t->hd;
+    let nptr = new n;
+    let fv = freevars_rule(r);
+    if (Set::member(level0,nptr)) {
+      let bad1 = Set::intersect(fv,level1);
+      let bad2 = Set::intersect(fv,level2);
+      if (!Set::is_empty(bad1)) {
+        warn("Level 0 symbol %s is defined in terms of these level 1 symbols:",n);
+        fprint_strset(stderr,bad1);
+      }
+      if (!Set::is_empty(bad2)) {
+        warn("Level 0 symbol %s is defined in terms of these level 2 symbols:",n);
+        fprint_strset(stderr,bad2);
+      }
+    }
+    else if (Set::member(level1,nptr)) {
+      // let bad1 = Set::intersect(fv,level1);
+      let bad2 = Set::intersect(fv,level2);
+      // if (!Set::is_empty(bad1)) {
+      //   warn("Level 1 symbol %s is defined in terms of these level 1 symbols:",n);
+      //   fprint_strset(stderr,bad1);
+      // }
+      if (!Set::is_empty(bad2)) {
+        warn("Level 1 symbol %s is defined in terms of these level 2 symbols:",n);
+        fprint_strset(stderr,bad2);
+      }
+    }
+  }
+  /* Another thing to check: any symbol defined in terms of # probably has
+     implicit whitespace. */
+  /* Any rule where there is no sequencing doesn't need whitespace */
+  /* If a definition has two string literals in sequence, it probably needs whitespace, e.g.,
+   * Content-Length .= "Content-Length" ":" 1*DIGIT.
+   */
+  /* But, DIGIT above doesn't need whitespace. */
+  /* Here's a weird one:
+       auth-param .= token "=" (token|quoted-string).
+       auth-scheme .= token.
+       challenge = auth-scheme 1*SP 1#auth-param.
+     So challenge has 1*SP which is explicit whitespace so you might conclude that there is
+     no implicit whitespace.  But auth-schem is a token meaning it should be surrounded
+     by implicit whitespace.  And challenge uses # which implies implicit whitespace.
+     This stuff is defined in RFC 2617.  That RFC refers to 2616, HTTP, for the augmented
+     BNF so we can expect that its whitespace conventions are followed.
+     The errata for these two RFCs is at http://skrb.org/ietf/http_errata.html
+     Nothing there about whitespace (a search of "white" is empty).
+     There is this correction about part of the abnf:
+         The domain attribute should be, as described in  [section 3.2.1], "a quoted,
+         space-separated list of URIs", but the ABNF given is:
+
+             domain = "domain" "=" <"> URI ( 1*SP URI ) <">
+
+         That describes exactly two space-separated URIs. It should be:
+
+             domain = "domain" "=" <"> URI *( 1*SP URI ) <">
+     When I look at this, I wonder whether a space is allowed after the first quote,
+     before the first URI.
+
+     Can there be whitespace between a field name and the colon?  2616 says they
+     "follow the same generic format as that given in Section 3.1 of RFC 822 [9].
+     Each header field consists of a name followed by a colon (":") and the field value."
+     RFC 822 has been obsoleted by 2822.  That RFC has plenty of comments about whitespace.
+     It seems that whitespace between the colon and field name was once allowed but is
+     now considered obsolete (see A.6.3).  "Obsolete" means, "these elements MUST be
+     interpreted by parsers of messages in order to be conformant to this
+     standard.  However, since items in this syntax have been determined
+     to be non-interoperable or to cause significant problems for
+     recipients of messages, they MUST NOT be generated by creators of
+     conformant messages."
+  */
+
+}
+
+
+/**************************** GLUSHKOV ****************************/
+// TODO: copied from conflicts -- should be refactored if we keep it
+static
+void glush0(rule_t,rule_t);
+static
+void glush_alt(rule_t r,rule_t right_ctxt) {
+  /* Same as glush0, but don't report Alt glush; only called
+     by glush0 when the Alt glush have already been reported */
+  switch (r->r) {
+  case &Alt(r2,r3):
+    glush_alt(r2,right_ctxt);
+    glush_alt(r3,right_ctxt);
+    return;
+  default:
+    glush0(r,right_ctxt);
+    return;
+  }
+}
+
+static grammar_t checking_glush_grammar;
+static
+void glush0(rule_t r,rule_t right_ctxt) {
+  switch (r->r) {
+  case &Seq(r2,r3):
+    glush0(r2,SEQ(r3,right_ctxt));
+    glush0(r3,right_ctxt);
+    return;
+  case &Alt(r2,r3):
+    let rng_all = cs_empty();
+    let rng_conflict = cs_empty();
+
+    let alts = alt2rules(r);
+    for (let rs = alts; rs; rs = rs->tl) {
+      let rng = cs_empty();
+      first(rng,SEQ(rs->hd,right_ctxt));
+      let rng2 = cs_dup(rng);
+      cs_intersect(rng2,rng_all);
+      cs_union(rng_conflict,rng2);
+      cs_union(rng_all,rng);
+    }
+    if (!is_cs_empty(rng_conflict)) {
+      /* an LL(1) conflict */
+      eprintf("************************************************************************\n");
+      num_conflicts_ll++;
+      eprintf("Conflict %u\n",num_conflicts_ll);
+      eprintf("LL(1) conflict on character(s) ");
+      cs_print(stderr,rng_conflict);
+      eprintf(" in Alt\n  ");
+      pr_rule(stderr,SEQ(r,right_ctxt),0);
+      int altnum = 1;
+      for (let x = alts; x; x = x->tl) {
+        eprintf("\nAlternative %d: ",altnum++);
+        pr_rule(stderr,x->hd,0);
+      }
+      eprintf("\nRight context: ");
+      pr_rule(stderr,right_ctxt,0);
+      eprintf("\n");
+      lookahead_glush(checking_glush_grammar,alts,right_ctxt);
+    }
+    glush_alt(r2,right_ctxt);
+    glush_alt(r3,right_ctxt);
+    return;
+  case &Opt(r2):
+    let rng2 = cs_empty();
+    let rng3 = cs_empty();
+    first(rng2,SEQ(r2,right_ctxt));
+    first(rng3,right_ctxt);
+    cs_intersect(rng2,rng3);
+    if (!is_cs_empty(rng2)) {
+      /* an LL(1) conflict */
+      eprintf("************************************************************************\n");
+      num_conflicts_ll++;
+      eprintf("Conflict %u\n",num_conflicts_ll);
+      eprintf("LL(1) conflict on character(s) ");
+      cs_print(stderr,rng2);
+      eprintf(" in Opt\n  ");
+      pr_rule(stderr,SEQ(r,right_ctxt),0);
+      eprintf("\n");
+      eprintf("Alternative 1: ");
+      pr_rule(stderr,r2,0);
+      eprintf("\nAlternative 2: ");
+      pr_rule(stderr,LIT(""),0);
+      eprintf("\nRight context: ");
+      pr_rule(stderr,right_ctxt,0);
+      eprintf("\n");
+      lookahead_glush(checking_glush_grammar,
+		    List::list(r2,LIT("")), // r2 first because greedy says try r2, only if fail assume ""
+		    right_ctxt);
+    }
+    glush0(r2,right_ctxt);
+    return;
+  case &Rcount(_,r2):
+    // FIX: we are assuming here a greedy parse
+    return;
+  case &Star(m,&Num(0),r2): return;
+  case &Star(m,&Num(n),r2):
+    if (m > n) return;
+    if (m == n) return; /* No choice involved */
+    glush0(OPT(r2),right_ctxt);
+    return;
+  case &Star(m,&Infinity,r2):
+    glush0(OPT(r2),right_ctxt);
+    return;
+  case &Hash(m,N,r2):
+    // FIX: not right.  r2 must be preceeded by comma...
+    if (repeat_zero(N)) return;
+    glush0(OPT(r2),right_ctxt);
+    return;
+  case &Symb(_,_):
+  case &Prose(_):
+  case &CharRange(_,_):
+  case &Minus(_,_):
+  case &Lit(_):
+    return;
+  }
+}
+
+void report_glush(grammar_t<`H> grm) {
+  reset_globals();
+  //  checking_glush_grammar = grm;
+  grammar_t followgrm = follow_grammar(grm);
+  grammar_t combinedgrm = List::append(grm,followgrm);
+  checking_glush_grammar = combinedgrm;
+  init_recursive(combinedgrm);
+  init_firstt(combinedgrm);
+  init_mayt(combinedgrm);
+  init_mustt(combinedgrm);
+  init_maybe_empty(combinedgrm);
+  for (let x = grm; x; x = x->tl) {
+    let &$(n,r,_) = x->hd;
+    let fn = follow_symbol(n);
+    glush0(r,SYMB(fn));
+  }
+}

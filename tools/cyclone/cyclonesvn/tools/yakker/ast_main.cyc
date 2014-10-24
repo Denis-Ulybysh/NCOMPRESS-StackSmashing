@@ -1,0 +1,16 @@
+#define ORIG_HEADER "small_imap.h"
+#define PATGEN_HEADER "small_imap_genpm.h"
+#define SYMBOLS_ENUM_BODY Command, Seq_range
+#define GET_ROOT_BODY \
+  if      (strcmp(root_name, "command")   == 0)  return Command;\
+  else if (strcmp(root_name, "seq-range") == 0)  return Seq_range;
+#define GET_ROOT_DEFAULT Command
+#define NAMESPACE SmallImapFormat
+#define MAIN_SWITCH_CASES \
+      case Command : \
+	p = SmallImapFormat::p_command(ykb); break;\
+      case Seq_range : \
+	p = SmallImapFormat::p_seq_range(ykb); break;
+
+
+#include "gen_ast_main.cyc"

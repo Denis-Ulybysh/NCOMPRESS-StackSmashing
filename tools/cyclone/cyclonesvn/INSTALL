@@ -1,0 +1,130 @@
+OVERVIEW
+
+Unpack the distribution and move into the resulting directory.  Note,
+if you are using cygwin, you must not unpack the distribution in a
+directory whose path contains a space character, e.g., don't unpack
+under C:\Documents and Settings; we suggest C:\cyclone.
+
+To build Cyclone, do
+
+  ./configure
+  make
+  make install
+
+To build the profiling libraries, you should instead do
+
+  ./configure
+  make all gprof aprof
+  make install
+
+In either case, after these steps, you can optionally do
+
+  make clean
+
+to reclaim about 20MB of disk space.  You can reclaim over another
+10MB by deleting the bin subdirectory.  (In fact, none of the
+subdirectories are needed after installation, but the other ones
+contain Cyclone programs that are useful examples.)
+
+To get off the ground, you need /bin/sh, GNU make, and gcc.  If GNU
+make is not the default make on your system, it might be installed as
+"gmake" so just type gmake instead of make if things don't work.
+
+By default, binaries will be stored into /usr/local/bin, libraries
+into /usr/local/lib/cyclone, and include files into
+/usr/include/cyclone.  If you wish to install into different
+directories, specify them using the options -bindir and -libdir and
+-includedir.  For example, you could do
+
+  ./configure -bindir /usr/bin -libdir /usr/lib/cyclone
+
+to alter the binary directory to /usr/bin and the library directory to
+/usr/lib/cyclone (while leaving the include directory as
+/usr/include/cyclone).
+
+If you wish to remove cyclone after installing it, simply do
+
+  make uninstall
+
+and it will remove any files and directories created in your system
+directories as a result of installation.
+
+POTENTIAL PROBLEMS
+
+(0) We have sometimes run into problems with gcc bugs.  This usually
+    turns up as a segmentation fault in the build process.  If you can
+    install another version of gcc you may be able to get things
+    working.
+
+    For example in Ubuntu Jaunty x86, gcc 4.3.3 is not working, but
+
+        sudo aptitude install gcc-4.1
+
+    will install an older version, and then
+
+        make CC=gcc-4.1
+
+    will build cyclone with it.
+
+(1) You won't be able to compile cyclone if are using cygwin and you
+    have placed the source in a directory whose name contains a space.
+    In particular, you can't compile under c:\Documents and Settings.
+    Move it to another directory.
+
+(2) Note that configure and make install use several utilities, which
+    need to be in your path.  In particular, Windows systems tend to have
+    a program called find that is different than the find we are
+    expecting.  cygwin puts the find we want in /usr/bin -- make sure a
+    different find is not earlier in your path.
+
+(3) Some users have had trouble running configure on a non-root
+    partition of a Linux system.  Try installing somewhere on the root
+    partition.
+
+(4) We use a program called buildlib to try to automatically construct
+    a Cyclone interface to the POSIX library.  Buildlib might fail if
+    your C library header files use GCC features we aren't expecting.
+    Contact us if this happens.
+
+(5) There are bugs in some versions of GCC that can cause a crash when
+    Cyclone builds.  Later versions tend to work better than older
+    versions.
+
+(6) You may have to raise your stack limit.  The way to do this varies
+    by shell; "ulimit", "limit", and "unlimit" are some commands used
+    in some shells.
+
+
+BUILDING A CROSS COMPILER
+
+You can build a cross compiler (which runs on one computer and
+compiles programs that are to run on a second computer) provided
+you already have a gcc cross compiler installed.
+
+To build the cross compiler do
+
+  ./configure --target=ARCH
+  make
+  make install
+
+where ARCH is the desired target architecture.
+
+This will build a cyclone executable that understands the -b flag:
+
+  cyclone -b ARCH -o foo foo.cyc
+
+will produce an executable, foo, suitable for running on ARCH.
+
+
+BUILDING WITHOUT THE AP PACKAGE
+
+This should only be done for performance comparison purposes between the 
+old (unsound) Pratt code that uses ints, and the new code that uses 
+arbitrary-precision integers.
+
+To build without the AP package do
+
+  make clean
+  mv Makefile.in.in.noap Makefile.inc.in
+  ./configure
+  make

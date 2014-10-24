@@ -1,0 +1,30 @@
+
+testaqualdefaults.cyc:27: alias qualifier bounds violated: RESTRICTED <> ALIASABLE
+testaqualdefaults.cyc:53: b was declared with type int *@aqual(UNIQUE) but initialized with type int *
+  ALIASABLE and UNIQUE are not compatible. ((different alias qualifiers))
+testaqualdefaults.cyc:118: field a of struct LCS expects type list_t<int *> != struct List<int *`GR12> *
+  @false and @true are not compatible. (different type constructors)
+testaqualdefaults.cyc:141: actual argument has type 
+	struct List<int *@aqual(`p)> *
+ but formal has type 
+	
+struct List<int *> *
+  `p and ALIASABLE are not compatible. 
+	((abstracted type variable doesn't unify with constant))
+testaqualdefaults.cyc:142: actual argument has type 
+	struct List<int *@aqual(`q)> *
+ but formal has type 
+	
+struct List<int *> *
+  `q and ALIASABLE are not compatible. 
+	((abstracted type variable doesn't unify with constant))
+testaqualdefaults.cyc:143: field a of struct LCS expects type list_t<int *> != struct List<int *@aqual(`p)> *
+
+  @false and @true are not compatible. (different type constructors)
+testaqualdefaults.cyc:144: field a of struct LCS expects type list_t<int *> != struct List<int *@aqual(`q)> *
+
+  @false and @true are not compatible. (different type constructors)
+testaqualdefaults.cyc:148: alias qualifier bounds violated: `p <> ALIASABLE
+testaqualdefaults.cyc:184: noalias pointers in datatypes are not allowed: EEE
+
+COMPILATION FAILED!

@@ -1,0 +1,3 @@
+T% COPY% *:*% INBOX% 
+(command T COPY% 5% "bar")
+(command T (copy %r:%r INBOX))

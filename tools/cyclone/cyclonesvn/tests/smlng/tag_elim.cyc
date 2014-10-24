@@ -1,0 +1,688 @@
+#include "core.h"
+#include "list.h"
+#include "stdio.h"
+#include "buffer.h"
+#include "smlng.h"
+#include "tag_elim.h"
+#include "dynamic.h"
+using Core;
+using List;
+namespace TagElim;
+
+// field is true if all text in the doc is guarded by an appropriate tag,
+// making an outer tag unnecessary.  Another pass
+// gets the top-down things.  (Eg. This pass makes <r><r>x</r><r><y></r> into
+// <r>x</r><r><y></r> instead of <r>xy</r>)
+
+// Difference between useless and seen (can't think of better names):
+// <B><B>x</B><PL>y</PL></B> strips outer B b/c bold_useless is set
+// <B>x</B><B>y</B> wraps an outer B so that down_opt can elim the tags, but
+//                  only when bold_seen (and bold_useless) is set
+struct SynthS {
+  bool mt_doc: 1;
+  bool no_text: 1; // Spc doesn't count
+  bool bold_useless: 1;
+  bool bold_seen: 1;
+  //  bool emph: 1;
+  bool ital_useless: 1;
+  bool ital_seen: 1;
+  bool strong_useless: 1;
+  bool strong_seen: 1; 
+  bool tt_useless: 1;
+  bool tt_seen: 1;
+  bool plain: 1;
+  bool u1: 1; // invariant: true if u2 is true
+  bool u2: 1; // invariant: true if u3 is true
+  bool u3: 1;
+  bool color: 1;
+  bool sz: 1;
+  int sizes: 10; // 0 at bit n means n DOES get used as a size
+  int colors: 8; // 0 at bit n means n DOES get used as a color
+};
+
+// unfortunately, the return size of up_opt is now 3 words, so it uses the
+// stack.
+union Synth {
+  struct SynthS s;
+  unsigned long long i;
+};
+
+synth_t init;
+
+// shared worklist -- better be empty when a pass is done!
+// Never used except to avoid stack overflow.  Will miss optimizations
+// right "on the edge", but it is *extremely* unlikely that we won't get
+// it in another pass.
+static list_t<doc_t> work_list = NULL;
+
+// currently destructive (of doc), but could easily be made functional
+$(doc_t, synth_t) up_opt_rec(doc_t doc) {
+#ifdef CHECK_STACK
+  if(!check_stack()) {
+    fprintf(stderr,"\nstack-overflow -- up_opt, recovering");
+    work_list = new List(doc,work_list);
+    synth_t synth;
+    synth.i = 0;
+    synth.s.sizes  = ~0;
+    synth.s.colors = ~0;
+    return $(doc,synth);
+  }
+#endif    
+  switch(doc) {
+  case &Seq(*dsp): 
+    let ds = *dsp;
+    init.s = SynthS(1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,1,~0,~0);
+    synth_t synth      = init;
+    synth_t prev_synth = init;
+    if(ds == NULL) {
+      synth.s.mt_doc = 1;
+      return $(Mt,synth);
+    }
+    if(ds->tl == NULL) {
+      return up_opt_rec(ds->hd);
+    }
+    list_t<doc_t> prev     = ds; // won't get used b/c of prev_synth
+    list_t<doc_t> prevprev = ds; // won't get used b/c of prev_synth
+    while(ds != NULL) {
+      let $(newd, inner_synth) = up_opt_rec(ds->hd);
+      ds->hd = newd; // destructive here
+      if(inner_synth.s.mt_doc) {
+	prev->tl = ds->tl;
+	ds = ds->tl;
+	continue;
+      }
+      // look for reasons to split the sequence and wrap with a redundant tag
+      // so the ensuing down optimization can remove the inner tags
+      list_t<int> split_tags = NULL; // no need to be heap-allocated
+      if(prev_synth.s.bold_seen && inner_synth.s.bold_seen)
+	split_tags = new List(B_tag, split_tags);
+      if(prev_synth.s.ital_seen && inner_synth.s.ital_seen)
+	split_tags = new List(I_tag, split_tags);
+      if(prev_synth.s.strong_seen && inner_synth.s.strong_seen)
+	split_tags = new List(S_tag, split_tags);
+      if(prev_synth.s.tt_seen && inner_synth.s.tt_seen)
+	split_tags = new List(TT_tag, split_tags);
+      
+      if(prev_synth.s.sz & inner_synth.s.sz 
+	 && ~(prev_synth.s.sizes | inner_synth.s.sizes)) {
+	int sizes = prev_synth.s.sizes | inner_synth.s.sizes;
+	// ASSUMES Zero is least and colors are consecutive.  Very destructive.
+	let split_tag = Zero;
+	while(sizes & 1 != 0) {
+	  sizes >>= 1;
+	  ++split_tag;
+	}
+	split_tags = new List(split_tag,split_tags);
+	}
+      if(prev_synth.s.color & inner_synth.s.color
+	 && ~(prev_synth.s.colors | inner_synth.s.colors)) {
+	int colors = prev_synth.s.colors | inner_synth.s.colors;
+	// ASSUMES r_tag is least and colors are consecutive.  Very destructive.
+	let split_tag = r_tag;
+	while(colors & 1 != 0) {
+	  colors >>= 1;
+	  ++split_tag;
+	}
+	split_tags = new List(split_tag,split_tags);
+      }
+
+      synth.i = synth.i & inner_synth.i;
+
+      if(split_tags != NULL) { //subtle: won't happen on first loop iteration
+	// IN PLACE sequence splitting
+	let next = ds->tl;
+	ds->tl = NULL;
+	doc_t d = new Seq(prev);
+	for(; split_tags != NULL; split_tags = split_tags->tl)
+	  d = new Tagged(split_tags->hd, d);
+	if(prev == *dsp) {
+	  *dsp = prevprev = prev = new List(d,next);
+	} else {
+	  prev = new List(d,next);
+	  prevprev->tl = NULL;
+	  *dsp = new List(new Seq(*dsp), prev); // imp_append(*dsp,prev);
+	  prevprev = *dsp; // comment this line if use imp_append!
+	}
+	prev_synth.i = inner_synth.i & prev_synth.i;
+	ds = next;
+      } else {
+	prevprev = prev;
+	prev = ds;
+	ds = ds->tl;
+	prev_synth = inner_synth;
+      }
+    }
+    return $(doc,synth);
+  case &Text(_): 
+    synth_t synth;
+    synth.i = 0;
+    synth.s.sizes  = ~0;
+    synth.s.colors = ~0;
+    return $(doc,synth);
+  case &Spc(_): 
+    synth_t synth;
+    synth.i = 0;
+    synth.s.no_text = 1;
+    synth.s.sizes  = ~0;
+    synth.s.colors = ~0;
+    return $(doc,synth);
+  case &Tagged(tag,*dp):
+    let d = *dp;
+    let $(d2, synth) = up_opt_rec(d);
+    if(synth.s.mt_doc)
+      return $(d,synth);
+    *dp = d2; // destructive
+    bool useless = false;
+    bool needtext = false;
+#define USELESS(FIELD) do {useless=synth.s.FIELD; synth.s.FIELD=true;} while(0)
+#define SEEN(FIELD) do {synth.s.FIELD=true;} while(0)
+    switch(tag) {
+    case Zero: case One: case  Two: case  Three: case  Four: case  Five: 
+    case Six: case  Seven: case  Eight: case  Nine:
+      USELESS(sz);
+      // assumes Zero is least tag and they're consecutive
+      if(!useless)
+	synth.s.sizes = ~(1 << (tag - Zero));
+      break;
+    case r_tag: case g_tag: case b_tag: case c_tag: case  m_tag: 
+    case y_tag: case k_tag: case w_tag:
+      USELESS(color); 
+      // assumes r_tag is least tag and they're consecutive
+      if(!useless)
+	synth.s.colors = ~(1 << (tag - r_tag));
+      break;
+    case B_tag:  USELESS(bold_useless);   SEEN(bold_seen); needtext=true; break;
+    case I_tag:  USELESS(ital_useless);   SEEN(ital_seen); needtext=true; break;
+    case S_tag:  USELESS(strong_useless); SEEN(strong_seen);needtext=true;break;
+    case TT_tag: USELESS(tt_useless);     SEEN(tt_seen);   break;
+      // can float EM? How?
+    case EM_tag: useless = synth.s.strong_useless; needtext=true; break; 
+    case PL_tag: // only color and size matter from outer tags
+      USELESS(plain);
+      synth.s.bold_useless = 1;   synth.s.bold_seen = 0;
+      synth.s.ital_useless = 1;   synth.s.ital_seen = 0;
+      synth.s.strong_useless = 1; synth.s.strong_seen = 0;
+      synth.s.tt_useless = 1;     synth.s.tt_seen = 0;
+      synth.s.tt_useless = 1;     synth.s.tt_seen = 0;
+      synth.s.u1 = synth.s.u2 = synth.s.u3 = 1;
+      break;
+    case U_tag: // can float U?
+      if(synth.s.u3)
+	useless = true;
+      if(synth.s.u2)
+	synth.s.u3 = true;
+      if(synth.s.u1)
+	synth.s.u2 = true;
+      synth.s.u1 = true;
+      break;
+    default: throw new Impossible("tag_elim: tag");
+    }
+#undef USELESS
+#undef SEEN
+    if(useless || (needtext && synth.s.no_text))
+      return $(d2,synth);
+    else
+      return $(doc,synth);
+  case Mt: 
+    synth_t synth;
+    synth.i = ~0;
+    return $(Mt,synth);
+  }
+}
+
+$(doc_t, synth_t) up_opt(doc_t doc) {
+  let ans = up_opt_rec(doc);
+  while(work_list != NULL) {
+    fprintf(stderr,"?");
+    doc_t next = work_list->hd;
+    work_list = work_list->tl;
+    up_opt_rec(next);
+  }
+  return ans;
+}
+
+$(list_t<doc_t>,list_t<doc_t>*) flatten_top_seq(doc_t d) {
+  switch(d) {
+  case &Seq(*dsp):
+    list_t<doc_t> * prev = dsp;
+    for(list_t<doc_t> ds = *dsp; ds != NULL; ds = ds->tl) {
+      let $(start,end) = flatten_top_seq(ds->hd);
+      if(start != NULL) {
+	*prev = start;
+	*end  = ds->tl;
+	prev  = end;
+      } else
+	prev = &ds->tl;
+    }
+    return $(*dsp, prev);
+  case &Text(_): fallthru;
+  case &Spc(_): fallthru;
+  case &Tagged(_,_): fallthru;
+  case Mt: return $(NULL,NULL);
+  }
+}
+
+// This should be run after up_opt/down_opt have converged because we want
+// to assume there are no useless tags in the sense of their optimizations
+
+struct ShuffleSynth {
+  bool color: 1;
+  bool sz: 1;
+};
+
+$(doc_t,shuffle_synth_t) up_shuffle_rec(doc_t d) {
+#ifdef CHECK_STACK
+  if(!check_stack()) {
+    fprintf(stderr,"\nstack-overflow -- up_shuffle, recovering");
+    work_list = new List(d,work_list);
+    return $(d,ShuffleSynth(0,0));
+  }
+#endif    
+  switch(d) {
+  case &Tagged(tag, *d2):
+    bool is_color = false;
+    bool is_size  = false;
+    switch(tag) {
+    case Zero: case One: case Two:   case  Three: case  Four: 
+    case Five: case Six: case Seven: case  Eight: case  Nine:
+      is_size = true;
+      break;
+    case r_tag: case g_tag: case b_tag: case c_tag: case  m_tag: 
+    case y_tag: case k_tag: case w_tag:      
+      is_color = true;
+      break;
+    default: break;
+    }
+    switch(*d2) {
+    case Mt: fallthru;
+    case &Text(_): return $(d,ShuffleSynth(is_color,is_size));
+    case &Spc(_): return $(d,ShuffleSynth(is_color,is_size));
+    case &Tagged(_,_):
+      let pr = up_shuffle_rec(*d2);
+      *d2 = pr[0];
+      return $(d,ShuffleSynth(is_color | pr[1].color,
+			      is_size  | pr[1].sz));
+    case &Seq(*dsp):
+      flatten_top_seq(*d2);
+      let ds = *dsp;
+      // now for the good stuff...
+      int num_from_front  = 0;
+      int start_from_back = 0;
+      int num_from_back   = 0;
+      let ds2 = ds;
+      for(; ds2 != NULL; ds2 = ds2->tl) {
+	++start_from_back;
+	let pr = up_shuffle_rec(ds2->hd);
+	ds2->hd = pr[0];
+	if(pr[1].color && is_color)
+	  ++num_from_front;
+	else if(pr[1].sz && is_size)
+	  ++num_from_front;
+	else
+	  break;
+      }
+      if(ds2 != NULL)
+	ds2 = ds2->tl;
+      for(; ds2 != NULL; ds2 = ds2->tl) {
+	let pr = up_shuffle_rec(ds2->hd);
+	ds2->hd = pr[0];
+	if(pr[1].color && is_color)
+	  ++num_from_back;
+	else if(pr[1].sz && is_size)
+	  ++num_from_back;
+	else {
+	  start_from_back += num_from_back + 1;
+	  num_from_back = 0;
+	}
+      }
+      //      fprintf(stderr,"D %d %d %d %d", length(ds), num_from_front, start_from_back, num_from_back);
+      if(num_from_front == 0 && num_from_back == 0) {
+	return $(d,ShuffleSynth(is_color,is_size));
+      }
+      list_t<doc_t> front_docs  = NULL;
+      list_t<doc_t> middle_docs = NULL;
+      list_t<doc_t> back_docs   = NULL;
+      let ds3 = ds;
+      if(num_from_front > 0) {
+	front_docs = ds;
+	--start_from_back;
+	while(--num_from_front) {
+	  --start_from_back;
+	  ds3 = ds3->tl;
+	}
+	middle_docs = ds3->tl;
+	ds3->tl = NULL;
+	ds3 = middle_docs;
+      } else
+	middle_docs = ds;
+      while(--start_from_back)
+	ds3 = ds3->tl;
+      back_docs = ds3->tl;
+      ds3->tl = NULL;
+      *dsp = middle_docs;
+      // FIX: don't generate so much gunk here
+      return $(new Seq(new List(new Seq(front_docs), new List(d, back_docs))),
+	       ShuffleSynth(is_color,is_size));
+    }
+
+  case Mt: fallthru;
+  case &Text(_): 
+    return $(d,ShuffleSynth(0,0));
+  case &Spc(_): 
+    return $(d,ShuffleSynth(0,0));
+
+      // these cases really only get called at the very top of a file,
+      // but could help on short examples
+  case &Seq(ds): 
+    flatten_top_seq(d);
+    for(; ds != NULL; ds = ds->tl)
+      ds->hd = up_shuffle_rec(ds->hd)[0];
+    return $(d,ShuffleSynth(0,0));
+
+  }
+}
+
+$(doc_t,shuffle_synth_t) up_shuffle(doc_t d) {
+  let ans = up_shuffle_rec(d);
+  while(work_list != NULL) {
+    fprintf(stderr,"\nstack-overflow: up_shuffle, recovering");
+    doc_t next = work_list->hd;
+    work_list = work_list->tl;
+    up_shuffle_rec(next);
+  }
+  return ans;
+}
+        
+// This should also be run after useless things are eliminated, though I'm
+// not sure it's crucial.  It tries to percolate underlines up.
+// Rough idea: synthesize the minimum U level on all paths to a leaf or
+// a plain.  When two adjacent have a minimum above 0, immediately wrap
+// with the minimum and go down each path nuking that many.
+// More complicated because we can do better when PL guards all paths.
+
+struct UnderSynth {
+  unsigned char ulevel;
+  unsigned char all_plain; // a boolean -- means ulevel is irrelevant
+};
+
+// it's subtle -- but we don't need to check for stack overflow here
+// because we'll only recur as far as under_elim did (and our stack frame
+// is smaller)
+doc_t nuke_under(doc_t doc, int ulevel) {
+  switch(doc) {
+  case &Text(_): 
+    fprintf(stderr,"!!!");
+    throw new Impossible("nuke_under reached a Text");
+  case &Spc(_): 
+    fprintf(stderr,"!!!");
+    throw new Impossible("nuke_under reached a Text");
+  case &Tagged(tag,*dp):
+    if(tag == PL_tag)
+      return doc;
+    if(tag == U_tag) {
+      if(ulevel > 1)
+	*dp = nuke_under(*dp,ulevel-1);
+      return *dp;
+    }
+    *dp = nuke_under(*dp,ulevel);
+    return doc;
+  case &Seq(ds):
+    for(; ds != NULL; ds = ds->tl)
+      ds->hd = nuke_under(ds->hd,ulevel);
+    return doc;
+  case Mt: return Mt;
+  }
+}
+
+$(doc_t,under_synth_t) under_elim_rec(doc_t doc) {
+#ifdef CHECK_STACK
+  if(!check_stack()) {
+    fprintf(stderr,"\nstack-overflow -- under_elim, recovering");
+    work_list = new List(doc,work_list);
+    return $(doc,UnderSynth(0,false));
+  }
+#endif    
+  switch(doc) {
+  case &Text(_): return $(doc,UnderSynth(0,false));
+  case &Spc(_): return $(doc,UnderSynth(0,false));
+  case &Tagged(tag,*dp):
+    let $(d,synth) = under_elim_rec(*dp);
+    *dp = d;
+    if(tag == PL_tag)
+      return $(doc,UnderSynth(0,true));
+    if(tag != U_tag)
+      return $(doc,synth);
+    else if(synth.all_plain)
+      return $(doc,UnderSynth(1,false));
+    else if(synth.ulevel < 3)
+      return $(doc,UnderSynth((unsigned char)(synth.ulevel + 1), false));
+    else
+      return $(doc,synth);
+  case &Seq(*dsp):
+    // FIX: SHARE THIS LOGIC WITH OTHER PASSES
+    let ds = *dsp;
+    if(ds == NULL)
+      return $(Mt,UnderSynth(0,true)); // okay to set all_plain?!?!
+    else if(ds->tl == NULL)
+      return under_elim_rec(ds->hd);
+    under_synth_t synth = UnderSynth(0,false);
+    under_synth_t prev_synth = synth;
+    list_t<doc_t> prev     = ds; // won't get used b/c of prev_synth
+    list_t<doc_t> prevprev = ds; // won't get used b/c of prev_synth
+    while(ds != NULL) {
+      let $(newd, inner_synth) = under_elim_rec(ds->hd);
+      ds->hd = newd; // destructive here
+
+      synth.ulevel = synth.ulevel < inner_synth.ulevel ? 
+	synth.ulevel : inner_synth.ulevel;
+      synth.all_plain = synth.all_plain && inner_synth.all_plain;
+
+      int ulevel;
+      if(prev_synth.ulevel == 0 || inner_synth.ulevel == 0)
+	ulevel = 0;
+      else if(prev_synth.all_plain && !inner_synth.all_plain)
+	ulevel = inner_synth.ulevel;
+      else if(!prev_synth.all_plain && inner_synth.all_plain)
+	ulevel = prev_synth.ulevel;
+      else if(!prev_synth.all_plain && !inner_synth.all_plain)
+	ulevel = (prev_synth.ulevel < inner_synth.ulevel) ? 
+	  prev_synth.ulevel : inner_synth.ulevel;
+      else
+	ulevel = 0;
+      if(ulevel > 0) {
+	prev_synth = UnderSynth(ulevel, 
+				prev_synth.all_plain && inner_synth.all_plain);
+	prev->hd = nuke_under(prev->hd, ulevel);
+	ds->hd   = nuke_under(ds->hd,   ulevel);
+	// IN PLACE sequence splitting
+	let next = ds->tl;
+	ds->tl = NULL;
+	doc_t d = new Seq(prev);
+	for(; ulevel > 0; --ulevel)
+	  d = new Tagged(U_tag,d);
+	// COPIED FROM up_opt
+	if(prev == *dsp) {
+	  *dsp = prevprev = prev = new List(d,next);
+	} else {
+	  prev = new List(d,next);
+	  prevprev->tl = NULL;
+	  *dsp = new List(new Seq(*dsp), prev); // imp_append(*dsp,prev);
+	  prevprev = *dsp; // comment this line if use imp_append!
+	}
+	ds = next;
+      } else {
+	prevprev = prev;
+	prev = ds;
+	ds = ds->tl;
+	prev_synth = inner_synth;
+      }
+    }
+    return $(doc,synth);
+
+  case Mt: return $(Mt,UnderSynth(0,true)); // okay to set all_plain?!?!
+  }    
+}
+
+$(doc_t,under_synth_t) under_elim(doc_t d) {
+  let ans = under_elim_rec(d);
+  while(work_list != NULL) {
+    fprintf(stderr,"\nstack-overflow: up_shuffle, recovering");
+    doc_t next = work_list->hd;
+    work_list = work_list->tl;
+    under_elim_rec(next);
+  }
+  return ans;
+}
+
+// Here we find regions suitable for passing to the dynamic programming code.
+// We should try harder to extend these regions, but for now we'll at 
+// leat be able to nail code that only has sizes or colors.  We can try
+// to finesse other tags later.
+struct DynSynth {
+  int num_size_docs;   // how many size tags we'd program over
+  int num_color_docs;  // how many color tags we'd program over
+  unsigned char only_sizes;  // are there only size docs
+  unsigned char only_colors; // are there only color docs
+};
+
+// probably need to avoid calling dynamic_size/color for very small trivial
+// problems.
+$(doc_t,dyn_synth_t) dynamic_regions_rec(doc_t doc, bool shift, int win_size) {
+#ifdef CHECK_STACK
+  if(!check_stack()) {
+    fprintf(stderr,"\nstack-overflow -- dynamic_regions, recovering");
+    work_list = new List(doc,work_list);
+    return $(doc,DynSynth(0,0,false,false));
+  }
+#endif    
+  switch(doc) {
+  case Mt: fallthru;
+  case &Spc(_): fallthru;
+  case &Text(_): return $(doc,DynSynth(0,0,true,true));
+  case &Seq(*dsp):
+    dyn_synth_t synth = DynSynth(0,0,true,true);
+    // now with sequence splitting: find maximal regions with only sizes/colors
+    flatten_top_seq(doc);
+    int only_sizes  = 0;
+    int only_colors = 0;
+    list_t<doc_t,`H> ds   = *dsp;
+    list_t<doc_t,`H> prev = NULL;
+    list_t<doc_t,`H> prev_start_sizes  = NULL; // not prev at beginning 
+    list_t<doc_t,`H> prev_start_colors = NULL; // not prev at beginning 
+    while(ds != NULL) {
+      //      fprintf(stderr,"\nA %d %d ", only_sizes, only_colors);
+      let $(newd, inner_synth) = dynamic_regions_rec(ds->hd,shift,win_size);
+      ds->hd = newd; // destructive here
+      synth.only_sizes     &= inner_synth.only_sizes;
+      synth.only_colors    &= inner_synth.only_colors;
+      synth.num_size_docs  += inner_synth.num_size_docs;
+      synth.num_color_docs += inner_synth.num_color_docs;
+      if(only_sizes > 2 && !inner_synth.only_sizes) {
+	if(prev_start_sizes == NULL) {
+	  // beginning of sequence -- split differently
+	  prev->tl = NULL;
+	  doc_t d = dynamic_size(new Seq(*dsp), shift, win_size);
+	  *dsp = new List(d, ds);
+	  prev_start_sizes = prev_start_colors = *dsp;
+	} else {
+	  list_t<doc_t> start = prev_start_sizes->tl;
+	  prev_start_sizes->tl = NULL;
+	  prev->tl = NULL;
+	  doc_t d = dynamic_size(new Seq(start), shift, win_size);
+	  prev_start_sizes = prev_start_colors = new List(d,ds);
+	  *dsp = new List(new Seq(*dsp), prev_start_sizes);
+	}
+	only_sizes = 0;
+	only_colors = 
+	  inner_synth.only_colors ? only_colors + inner_synth.num_color_docs :0;
+      } else if(only_colors > 2 && !inner_synth.only_colors) {
+	if(prev_start_colors == NULL) {
+	  // beginning of sequence -- split differently
+	  prev->tl = NULL;
+	  doc_t d = dynamic_color(new Seq(*dsp), shift, win_size);
+	  *dsp = new List(d, ds);
+	  prev_start_sizes = prev_start_colors = *dsp;
+	  only_sizes  = synth.only_sizes;
+	  only_colors = synth.only_colors;
+	} else {
+	  list_t<doc_t> start = prev_start_colors->tl;
+	  prev_start_colors->tl = NULL;
+	  prev->tl = NULL;
+	  doc_t d = dynamic_color(new Seq(start), shift, win_size);
+	  prev_start_sizes = prev_start_colors = new List(d,ds);
+	  *dsp = new List(new Seq(*dsp), prev_start_sizes);
+	}
+	only_colors = 0;
+	only_sizes = 
+	  inner_synth.only_sizes  ? only_sizes + inner_synth.num_size_docs : 0;
+      } else {
+	if(only_sizes == 0 && inner_synth.only_sizes && prev != NULL)
+	  prev_start_sizes = prev;
+	if(only_colors == 0 && inner_synth.only_colors && prev != NULL)
+	  prev_start_colors = prev;
+	only_sizes  = 
+	  inner_synth.only_sizes  ? only_sizes + inner_synth.num_size_docs : 0;
+	only_colors = 
+	  inner_synth.only_colors ? only_colors + inner_synth.num_color_docs :0;
+      }
+      prev = ds;
+      ds = ds->tl;
+    }
+    //    fprintf(stderr,"\nA %d %d ", only_sizes, only_colors);
+    if(only_sizes > 2 && prev_start_sizes != NULL && !synth.only_sizes) {
+      list_t<doc_t> start = prev_start_sizes->tl;
+      prev_start_sizes->tl = NULL;
+      *dsp = new List(new Seq(*dsp), 
+	     new List(dynamic_size(new Seq(start), shift, win_size),NULL));
+    }
+    else if(only_colors > 2 && prev_start_colors != NULL && !synth.only_colors){
+      list_t<doc_t> start = prev_start_colors->tl;
+      prev_start_colors->tl = NULL;
+      *dsp = new List(new Seq(*dsp), 
+	     new List(dynamic_color(new Seq(start), shift, win_size),NULL));
+    }
+    if(!synth.only_sizes)
+      synth.num_size_docs = 0;
+    if(!synth.only_colors)
+      synth.num_color_docs = 0;
+    return $(doc,synth);
+	
+  case &Tagged(tag,*d):
+    let $(d2,DynSynth(num_sz,num_col,sz,col)) = 
+      dynamic_regions_rec(*d,shift,win_size);
+    *d = d2;
+    switch(tag) {
+      // try harder here -- we should be able to say true for size and
+      // treat the region abstractly EASY FIX?
+    case Zero: case One: case  Two: case  Three: case  Four: case  Five: 
+    case Six: case  Seven: case  Eight: case  Nine:
+      if(col && num_col > 2) {
+	*d = dynamic_color(d2, shift, win_size);
+      }
+      return $(doc,DynSynth((sz ? num_sz+1 : 0), 0, sz,false));
+    case r_tag: case g_tag: case b_tag: case c_tag: case  m_tag: 
+    case y_tag: case k_tag: case w_tag:
+      if(sz && num_sz > 2)
+	*d = dynamic_size(d2, shift, win_size);
+      return $(doc,DynSynth(0,(col ? num_col+1 : 0),false,col));
+    default:
+      if(sz && num_sz > 2)
+	*d = dynamic_size(d2, shift, win_size);
+      else if(col && num_col > 2) {
+	*d = dynamic_color(d2, shift, win_size);
+      }
+      return $(doc,DynSynth(0,0,false,false));
+    }
+  }
+}
+
+$(doc_t,dyn_synth_t) dynamic_regions(doc_t d, bool shift, int win_size) {
+  let ans = dynamic_regions_rec(d,shift,win_size);
+  while(work_list != NULL) {
+    fprintf(stderr,"\nstack-overflow: up_shuffle, recovering");
+    doc_t next = work_list->hd;
+    work_list = work_list->tl;
+    dynamic_regions_rec(next,shift,win_size);
+  }
+  return ans;
+}

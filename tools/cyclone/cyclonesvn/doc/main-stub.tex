@@ -1,0 +1,143 @@
+\newif\ifpdf
+\ifx\pdfoutput\undefined
+  \pdffalse               % we are not running PDFLaTeX
+\else
+  \pdfoutput=1            % we are running PDFLaTeX
+  \pdftrue
+\fi
+
+\usepackage{alltt}
+
+%\usepackage{index}
+\usepackage{makeidx}
+\makeindex
+\usepackage{color}
+\definecolor{lightgray}{gray}{.85}
+\definecolor{bluegray}{rgb}{.25,.25,.65}
+\definecolor{lightblue}{rgb}{.75,.81,1}
+\usepackage{palatino}
+\usepackage{underscore}
+%% tt versions of backslash, left brace, right brace
+\newcommand{\bs}{\texttt{\char`\\}}
+\newcommand{\lb}{\texttt{\char`\{}}
+\newcommand{\rb}{\texttt{\char`\}}}
+
+
+
+
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% IMPORTANT: \usepackage{hyperref} SHOULD BE THE LAST USEPACKAGE   %%%
+%%% (OR ELSE THINGS BREAK)                                           %%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage[colorlinks=true,linkcolor=bluegray,anchorcolor=bluegray,
+citecolor=bluegray,filecolor=bluegray,menucolor=bluegray,pagecolor=bluegray,
+urlcolor=bluegray]{hyperref}
+
+%HEVEA\newcommand\pagecolor[1]{}%% Eliminate hevea warning
+\ifscreen
+%\pagecolor{lightgray}
+%\pagestyle{plain}
+\setlength\paperheight{6in}
+\setlength\paperwidth{8in}
+\setlength\oddsidemargin{-.5in}
+\setlength\textwidth{7in}
+\setlength\topmargin{-1in}
+\setlength\textheight{5in}
+\ifpdf
+\pdfpageheight=6in
+\pdfpagewidth=8in
+\pdfcatalog{/PageMode/FullScreen}
+\fi %pdf
+\fi %screen
+
+%%% We use these instead of hyperref's autoref because HeVeA does not
+%%% support \autoref.  We use \ref instead of \ref* for the same
+%%% reason.
+\newcommand{\appendixref}[1]{\hyperref[#1]{Appendix~\ref{#1}}}
+\newcommand{\sectionref}[1]{\hyperref[#1]{Section~\ref{#1}}}
+
+%HEVEA \let\oldmeta=\@meta
+%HEVEA \renewcommand{\@meta}{\oldmeta \begin{rawhtml} <style type="text/css"> body {font-family: palatino, georgia, serif; margin-left: 7%; margin-right: 7%;} </style> \end{rawhtml}}
+
+
+%HEVEA\title{CYCLONE User's Manual, Version 1.0}
+
+\begin{document}
+\ifscreen
+\thispagestyle{empty}
+\textcolor{bluegray}{
+%HEVEA\begin{rawhtml}<h1 style="font-size: 48pt;" align="center">Cyclone User's Manual</h1>\end{rawhtml}
+%HEVEA\begin{latexonly}
+\vspace{.5in}
+\begin{center}
+  {\fontsize{.9in}{.8in}\selectfont Cyclone User's Manual}\\[.5in]
+\end{center}
+%HEVEA\end{latexonly}
+}
+\else
+\vspace{1in}
+\begin{center}
+  \Huge Cyclone User's Manual
+\end{center}
+\fi
+\begin{center}
+\input{version}
+The latest version of this manual should be available at \\
+\href{http://www.eecs.harvard.edu/~greg/cyclone/}{\url{http://www.eecs.harvard.edu/~greg/cyclone/}} \\
+\href{http://www.research.att.com/projects/cyclone/}{\url{http://www.research.att.com/projects/cyclone/}} and
+\href{http://www.cs.umd.edu/projects/cyclone/}{\url{http://www.cs.umd.edu/projects/cyclone/}}.
+\end{center}
+
+
+%BEGIN LATEX
+\newpage
+
+\tableofcontents
+%END LATEX
+\newpage
+
+\input{intro} %JGM
+\input{tutorial} %JGM
+\input{pointers} %JGM
+\input{taggedunions} %JGM
+\input{patterns} %JGM
+\input{typeinference.tex} %JGM
+\section{Polymorphism}
+\hypertarget{polymorphism}{}
+
+Use \texttt{`a} instead of \texttt{void *}.
+
+\input{regions} %JGM+MWH
+\input{aliasfree} %NS
+\input{namespaces} %JGM
+\input{varargs} %DG
+\input{definiteassignment} %DG
+\input{advanced} %DG
+%\input{generics} -- I'm omitting this for now since it's broken
+
+\appendix
+
+\input{porting} %JGM
+\input{faq}     %JGM
+\input{libraries}
+\input{grammar}
+\input{installing}
+
+\section{Tools}
+\input{compiler}
+\subsection{The lexer generator}
+\subsection{The parser generator}
+\input{aprof}
+\input{buildlib}
+
+\printindex
+
+\end{document}
+
+% Local Variables:
+% TeX-master: "main-screen"
+% End:

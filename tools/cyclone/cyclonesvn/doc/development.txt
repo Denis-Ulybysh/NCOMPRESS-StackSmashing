@@ -1,0 +1,50 @@
+This document describes the Cyclone compiler development environment.
+
+OVERVIEW
+
+The Cyclone compiler translates Cyclone source files to C.  So that
+development in Cyclone is of the same flavor as development in C,
+platform dependencies are encoded as preprocessor directives
+(#ifdef's, #define's, etc.) in Cyclone .h files.  As a result, a
+platform-independent Cyclone file is compiled to a platform-dependent
+C file, since the preprocessor is run during compilation.
+
+The C files generated for the Cyclone compiler itself are stored in
+the directory cyclone/bin/genfiles (hereon, the C files stored in this
+directory are called `genfiles').  We have taken care that these
+particular C files are platform independent.
+
+The remainder of this file describes how to properly develop the
+compiler so that the files in cyclone/bin/genfiles are kept
+consistent.  We first present the basic development procedure, in
+which the files in genfiles change, but none are added or deleted.  We
+then describe how to safely add or remove files while maintaining
+consistency.
+
+BASIC DEVELOPMENT
+
+The compiler source is stored in the directory cyclone/src, and the
+standard library source (eventually compiled to the file libcyc.a) is
+stored in cyclone/lib.  To build the compiler (and build the standard
+library if needed), type
+
+  make cyclone_src
+
+from the cyclone directory.  This will generate the .c files for the
+current architecture in the lib and src directories, as well as the
+compiler itself, in the directory build/boot.  Once the compiler has
+been tested and is ready to be checkpointed, type
+
+  make update
+
+from the cyclone directory.  This will copy the .c files that changed
+since the last checkpoint to cyclone/bin/genfiles.
+
+SPECIAL DEVELOPMENT OPERATIONS
+
+On occasion, you will need to add genfiles, or perhaps delete them.
+To do this, update Makefile.inc.in so that the CYCLONE_SRCS,
+CYCLONE_LIBS, and/or CYCLONE_H variables reflect your changes.  That
+is, remove any files that need to be removed, or add new ones.  Then
+do ./configure from the cyclone directory to regenerate the
+Makefile.inc file.

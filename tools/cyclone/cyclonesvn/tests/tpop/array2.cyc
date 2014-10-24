@@ -1,0 +1,15 @@
+#include "stdio.h"
+
+void f(string*{10}`H arr)
+{
+  int i;
+  for(i = 0; i < 10; i++)
+    printf("%s\n",arr[i]);
+}
+  
+int main()
+{
+  string arr[10] = {"1","2","3","4","5","6","7","8","9","10"};
+  f(arr);
+  return 0;
+}

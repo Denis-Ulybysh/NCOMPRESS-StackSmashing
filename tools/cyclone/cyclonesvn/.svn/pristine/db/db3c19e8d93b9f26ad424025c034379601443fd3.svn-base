@@ -1,0 +1,151 @@
+#include <buffer.h>
+#include <string.h>
+#include <core.h>
+#include <stdlib.h>
+#include <list.h>
+#include <graph.h>
+#include <hashtable.h>
+
+#include "fa.h"
+#include "axarray.h"
+#include "earley.h"
+#include "earley-parsetree.h"
+#include "semiring.h"
+#include "dfa.h"
+
+using List;
+using Semiring;
+
+namespace FsmDFA;
+
+static st_t trans(EarleyFsmBackend::DFA::edfa_t dfa, st_t s, act_t a){
+  return target(dfa->d,s,a);
+}
+
+static $(st_t,Semiring::weight_t) trans_w(EarleyFsmBackend::DFA::edfa_t dfa, st_t s, act_t a){
+  return target_w_weight(dfa->d,s,a);
+}
+
+static int in_final(EarleyFsmBackend::DFA::edfa_t dfa, act_t a, st_t s){
+  return Set::member(dfa_final_attrs(dfa->d,s),a);
+}
+
+static int is_final(EarleyFsmBackend::DFA::edfa_t dfa, st_t s){
+  return dfa_is_final(dfa->d,s);
+}
+
+static Semiring::weight_t final_weight(EarleyFsmBackend::DFA::edfa_t dfa, st_t s){
+  return dfa_final_weight(dfa->d,s);
+}
+
+static att_t ?`H wrap_final_attrs(dfa_t dfa,st_t s) {
+  try {
+    let fs_set = dfa_final_attrs(dfa,s);
+    if (Set::is_empty(fs_set))
+    return new {};
+    return List::to_array(Set::to_list(fs_set));
+  } catch
+  {
+    case &Core::Not_found:
+    return NULL;
+  }
+}
+
+static act_t ?final_attrs(EarleyFsmBackend::DFA::edfa_t dfa, st_t s){
+  return wrap_final_attrs(dfa->d,s);
+}
+
+static st_t get_start(EarleyFsmBackend::DFA::edfa_t dfa){return dfa->start;}
+
+static const char ?act2symb(act_t act, Hashtable::table_t<act_t,str_t> as_table) {
+  let sopt = Hashtable::lookup_opt(as_table,act);
+  if (sopt == NULL || *sopt == NULL) return "?unknown?";
+  else return **sopt;
+}
+
+static string_t act_2_symb(EarleyFsmBackend::DFA::edfa_t dfa, act_t a){
+  return act2symb(a,dfa->action_symb_table);
+}
+
+static $(act_t, act_t, st_t, st_t) get_repeat_info(EarleyFsmBackend::DFA::edfa_t dfa, st_t state){
+  return dfa_get_repeat_info(dfa->d,state,Earley::callout_action());
+}
+
+static st_t construct_repeat_dfa(EarleyFsmBackend::DFA::edfa_t dfa, act_t next, 
+                          st_t target_s, st_t final){
+  return mk_repeat_dfa(dfa->d,next,Earley::repeat_decr_action(),target_s,
+      Earley::repeat_final_action(), final);
+}
+
+
+/*
+ *  Implementation of grammar edfa for interpreted dfa.
+ */
+
+// Get the symbol-action for the specified symbol.
+static act_t grm_get_symb_action(EarleyFsmBackend::DFA::grammar_edfa_t dfa, string_t<`H> symb){
+  let symbptr = new symb; // (const char ?)aprintf("%s",symb);
+  return Hashtable::lookup(dfa->symb_action_table, symbptr);
+}
+
+// Get the start state for the specified symbol-action.
+static st_t grm_get_symb_start(EarleyFsmBackend::DFA::grammar_edfa_t dfa, act_t symb_act){
+  return Axarray::get(dfa->symb_start_states,symb_act - MIN_ACTION);
+}
+
+static unsigned int grm_get_num_states(EarleyFsmBackend::DFA::grammar_edfa_t dfa){
+  return dfa_get_num_states(dfa->d);
+}
+
+static EarleyFsmBackend::DFA::edfa_t grm_get_dfa0(EarleyFsmBackend::DFA::grammar_edfa_t dfa, st_t start){
+  return new EarleyFsmBackend::DFA::edfa(dfa->d,start,dfa->action_symb_table);
+}
+
+DEFINE_MK_ANY_EB(EarleyFsmBackend)
+
+static EarleyAnyBackend::DFA::edfa_t grm_get_dfa(EarleyFsmBackend::DFA::grammar_edfa_t dfa, st_t start){
+  return mk_any_eb(grm_get_dfa0(dfa,start));
+}
+
+EarleyAnyBackend::DFA::edfa_t create_edfa(dfa_t dfa, Earley::symb_info_t si){
+  return mk_any_eb(new EarleyFsmBackend::DFA::edfa(dfa,1,Earley::get_as_table(si)));
+}
+
+// TODO: phase out use of filename in call to fsm2dfa.
+EarleyAnyBackend::DFA::edfa_t init_dfa() {
+  let r = Earley::fsm2dfa("earley-dfa.txt");
+  if (!r) {
+    throw new Core::Failure("Failed to reconstruct DFA.");
+  }
+  let $(dfa,_,symb_info) = *r;
+  return create_edfa(dfa,symb_info);
+}
+
+static EarleyFsmBackend::DFA::grammar_edfa_t fsm2grm_edfa0(string_t filename) {
+  let si = Earley::new_symb_info();
+  let r = fsm_dfa(filename,Earley::symb2act,si);
+  if (!r) throw new Core::Invalid_argument((const char ?)aprintf("Invalid DFA in file %s.",filename));
+  else{
+    let &$(dfa,_) = (_@)r;
+    //);
+    // Table of start states is encoded as transitions from start state.
+    let txs = dfa_get_trans_map(dfa,1);
+    let sz = (!txs) ? 0 : txs->hd->f0 - MIN_ACTION; /* guess that the first action is the maximum, 
+                                           so use as length of the array.*/
+    let start_states = Axarray::create(sz, (st_t)0);
+    for(;txs; txs = txs->tl){
+      Axarray::set(start_states,txs->hd->f0 - MIN_ACTION, txs->hd->f1);
+    }
+    return new EarleyFsmBackend::DFA::grammar_edfa(dfa,
+        Earley::get_as_table(si), 
+        Earley::get_sa_table(si),
+        start_states);
+  }
+}
+
+EarleyAnyBackend::DFA::grammar_edfa_t fsm2grm_edfa(string_t filename){
+  let gd = fsm2grm_edfa0(filename);
+  return new EarleyAnyBackend::DFA::grammar_edfa (gd,
+      grm_get_symb_action, grm_get_symb_start, grm_get_num_states, grm_get_dfa);
+}
+

@@ -1,0 +1,730 @@
+\section{Porting C code to Cyclone}
+
+%HEVEA \begin{latexonly}
+\ifscreen
+\newenvironment{porta}[2]{%
+  \begin{list}{}{}%
+  \item[\hypertarget{#1}{\colorbox{lightblue}{\textbf{#2}}}]}{\end{list}}
+\else
+\newenvironment{porta}[2]{%
+  \begin{list}{}{}%
+  \item[\hypertarget{#1}{\textbf{#2}}]}{\end{list}}
+\fi
+%HEVEA \end{latexonly}
+%HEVEA \newenvironment{porta}[2]{%
+%HEVEA   \begin{list}{}{}%
+%HEVEA   \item[\hypertarget{#1}{%
+%HEVEA \begin{rawhtml}<table><tr><td bgcolor="c0d0ff">\end{rawhtml}%
+%HEVEA \textbf{#2}%
+%HEVEA \begin{rawhtml}</td></tr></table>\end{rawhtml}%
+%HEVEA }]}{\end{list}}
+Though Cyclone resembles and shares a lot with C, porting is not
+always straightforward.  Furthermore, it's rare that you actually port
+an entire application to Cyclone.  You may decide to leave certain
+libraries or modules in C and port the rest to Cyclone.  In this
+chapter, we want to share with you the tips and tricks that we have
+developed for porting C code to Cyclone and interfacing Cyclone
+code against legacy C code.
+
+\subsection{Semi-Automatic Porting}
+
+The Cyclone compiler includes a simple porting mode which you can
+use to try to move your C code closer to Cyclone.  The porting
+tool is not perfect, but it's a start and we hope to develop it
+more in the future.  
+
+When porting a file, say \texttt{foo.c}, you'll first need to
+copy the file to \texttt{foo.cyc} and then edit it to
+add \texttt{__cyclone_port_on__;} and 
+\texttt{__cyclone_port_off__;} around the code that you want
+Cyclone to port.  For example, if after copying \texttt{foo.c},
+the file \texttt{foo.cyc} contains the
+following:
+\begin{verbatim}
+1.   #include <stdio.h>
+2. 
+3.   void foo(char *s) {
+4.     printf(s);
+5.   }
+6. 
+7.   int main(int argc, char **argv) {
+8.     argv++;
+9.     for (argc--; argc >= 0; argc--, argv++)
+10.      foo(*argv);
+11.  }
+\end{verbatim}
+then you'll want to insert \texttt{__cyclone_port_on__;} at line
+2 and \texttt{__cyclone_port_off__;} after line 11.  You do not
+want to port standard include files such as \texttt{stdio}, hence
+the need for the delimiters.
+
+Next compile the file with the \texttt{-port} flag:
+\begin{verbatim}
+  cyclone -port foo.cyc > rewrites.txt
+\end{verbatim}
+and pipe the output to a file, in this case \texttt{rewrites.txt}.
+If you edit the output file, you will see that the compiler has
+emitted a list of edits such as the following:
+\begin{verbatim}
+  foo.cyc(5:14-5:15): insert `?' for `*'
+  foo.cyc(9:24-9:25): insert `?' for `*'
+  foo.cyc(9:25-9:26): insert `?' for `*'
+\end{verbatim}
+You can apply these edits by running the \texttt{rewrite} program
+on the edits:
+\begin{verbatim}
+  rewrite -port foo.cyc > rewrites.txt
+\end{verbatim}
+(The \texttt{rewrite} program is written in Cyclone and included
+in the \texttt{tools} sub-directory.)  This will produce a new
+file called \texttt{foo_new.cyc} which should look like this:
+\begin{verbatim}
+#include <stdio.h>
+
+__cyclone_port_on__;
+
+void foo(char ?s) { 
+  printf(s);
+}
+
+int main(int argc, char ??argv) {
+  argv++;
+  for (argc--; argc >= 0; argc--, argv++) 
+    foo(*argv);
+}
+__cyclone_port_off__;
+\end{verbatim}
+Notice that the porting system has changed the pointers from
+thin pointers to fat pointers (\texttt{?}) to support the pointer
+arithmetic that is done in \texttt{main}, and that this 
+constraint has flowed to procedures that are called (e.g., \texttt{foo}).
+
+You'll need to strip out the port-on and port-off directives and
+then try to compile the file with the Cyclone compiler.  In this
+case, the rewritten code in \texttt{foo_new.cyc} compiles with
+a warning that \texttt{main} might not return an integer value.
+In general, you'll find that the porting tool doesn't always
+produce valid Cyclone code.  Usually, you'll have to go in and
+modify the code substantially to get it to compile.  Nonetheless,
+the porting tool can take care of lots of little details for
+you.  
+
+\subsection{Manually Translating C to Cyclone}
+
+To a first approximation, you can port a simple program
+from C to Cyclone by following these steps which are
+detailed below:
+\begin{itemize}
+\item \hyperlink{port:pointers}{Change pointer types to fat pointer types where necessary.}  
+\item \hyperlink{port:malloc}{Use comprehensions to heap-allocate arrays.}
+\item \hyperlink{port:unions}{Use tagged unions for unions with pointers.}
+\item \hyperlink{port:initialize}{Initialize variables.}  
+\item \hyperlink{port:cases}{Put breaks or fallthrus in switch cases.} 
+\item \hyperlink{port:temp}{Replace one temporary with multiple temporaries.}  
+\item \hyperlink{port:rgns}{Connect argument and result pointers with the same region.}
+\item \hyperlink{port:types}{Insert type information to direct the type-checker.}
+\item \hyperlink{port:const}{Copy ``const'' code or values to make it non-const.}  
+\item \hyperlink{port:free}{Get rid of calls to free, calloc, etc.}
+\item \hyperlink{port:poly}{Use polymorphism or tagged unions to get rid of void*.}  
+\item \hyperlink{port:vararg}{Rewrite the bodies of vararg functions.}
+\item \hyperlink{port:setjmp}{Use exceptions instead of setjmp.}
+\end{itemize}
+
+Even when you follow these suggestions, you'll still need to test and
+debug your code carefully.  By far, the most common run-time errors
+you will get are uncaught exceptions for null-pointer dereference
+or array out-of-bounds.  Under Linux, you should get a stack backtrace
+when you have an uncaught exception which will help narrow down
+where and why the exception occurred.  On other architectures, you
+can use \texttt{gdb} to find the problem.  The most effective way
+to do this is to set a breakpoint on the routines \texttt{\_throw\_null()}
+and \texttt{\_throw\_arraybounds()} which are defined in the
+runtime and used whenever a null-check or array-bounds-check fails.
+Then you can use \texttt{gdb}'s backtrace facility to see where
+the problem occurred.  Of course, you'll be debugging at the C
+level, so you'll want to use the \texttt{-save-c} and \texttt{-g}
+options when compiling your code.  
+
+\begin{porta}{port:pointers}{Change pointer types to fat pointer types where necessary.}  
+Ideally, you should examine the code and use thin pointers (e.g., \texttt{int*}
+or better \texttt{int*@notnull}) wherever possible as these require fewer
+run-time checks and less storage.  However, recall that thin pointers
+do not support pointer arithmetic.  In those situations, you'll need
+to use fat pointers (e.g., \texttt{int*@fat} which can also be written
+as \texttt{int?}).  A particularly simple strategy 
+when porting C code is to just change all pointers to fat pointers.
+The code is then more likely to compile, but will have greater overhead.
+After changing to use all fat pointers, you may wish to profile or reexamine
+your code and figure out where you can profitably use thin pointers.
+
+Be careful with \texttt{char} pointers.  By default, a \texttt{char ?}
+is treated as zero-terminated, i.e. a \texttt{char * @fat @zeroterm}.
+If you are using the \texttt{char} pointer as a buffer of bytes, then
+you may actually wish to change it to be a \texttt{char ? @nozeroterm}
+instead.  Along these lines, you have to be careful that when you are
+using arrays that get promoted to pointers, that you correctly
+indicate the size of the array to account for the zero terminator.
+For example, say your original C code was
+\begin{verbatim}
+    char line[MAXLINELEN];
+    while (fgets(line, MAXLINELEN, stdin)) ...
+\end{verbatim}
+If you want your pointer to be zero-terminated, you would have to do
+the following:
+\begin{verbatim}
+    char line[MAXLINELEN+1] @zeroterm;
+    while (fgets(line, MAXLINELEN, stdin)) ...
+\end{verbatim}
+The \texttt{@zeroterm} qualifier is needed since \texttt{char}
+\emph{arrays} are not zero-terminated by default.  Adding the
+\texttt{+1} makes space for the extra zero terminator that Cyclone
+includes, ensuring that it won't be overwritten by \texttt{fgets}.  If
+you don't do this, you could well get an array bounds exception at
+runtime.  If you don't want your \texttt{char} array to be
+zero-terminated, you can simply leave the original C code as is.
+\end{porta}
+
+\begin{porta}{port:malloc}{Use comprehensions to heap-allocate arrays.}
+Cyclone provides limited support for \texttt{malloc} and separated
+initialization but this really only works for bits-only objects.
+To heap- or region-allocate and initialize an array that might contain
+pointers, use
+\texttt{new} or \texttt{rnew} in conjunction with array comprehensions.  
+For example, to copy a vector of integers \texttt{s}, one might write:
+\begin{verbatim}
+  int *@fat t = new {for i < numelts(s) : s[i]};
+\end{verbatim}
+\end{porta}
+
+\begin{porta}{port:unions}{Use tagged unions for unions with pointers.}
+Cyclone only lets you read members of unions that 
+contain ``bits'' (i.e., ints; chars;
+shorts; floats; doubles; or tuples, structs, unions, or arrays of bits.)
+So if you have a C union with a pointer type in it, you'll have to
+code around it.  One way is to simply use a \texttt{@tagged} union.
+Note that this adds hidden tag and associated checks to ensure safety.
+\end{porta}
+
+\begin{porta}{port:initialize}{Initialize variables.}  
+Top-level variables must be initialized
+in Cyclone, and in many situations, local variables must be initialized.
+Sometimes, this will force you to change the type of the variable
+so that you can construct an appropriate initial value.  For instance,
+suppose you have the following declarations at top-level:
+\begin{verbatim}
+struct DICT; 
+struct DICT *@notnull new_dict();
+struct DICT *@notnull d;
+void init() {
+  d = new_dict();
+}
+\end{verbatim}
+
+Here, we have an abstract type for dictionaries 
+(\texttt{struct Dict}), a constructor
+function (\texttt{new\_dict()}) which returns a pointer to a new
+dictionary, and a top-level variable (\texttt{d}) which is meant
+to hold a pointer to a dictionary.  The \texttt{init} function
+ensures that \texttt{d} is initialized.  However, 
+Cyclone would complain that 
+\texttt{d} is not initialized because \texttt{init} may not be
+called, or it may only be called after \texttt{d} is already used.  
+Furthermore, the only way to initialize \texttt{d}
+is to call the constructor, and such an expression is not a 
+valid top-level initializer.  The solution is to declare \texttt{d} as
+a ``possibly-null'' pointer to a dictionary and initialize it
+with \texttt{NULL}:
+\begin{verbatim}
+struct DICT; 
+struct DICT *nonnull new_dict();
+struct DICT *d;
+void init() {
+  d = new_dict();
+}
+\end{verbatim}
+
+Of course, now whenever you use \texttt{d}, either you or the compiler
+will have to check that it is not \texttt{NULL}.
+\end{porta}
+
+\begin{porta}{port:cases}{Put breaks or fallthrus in switch cases.}  
+Cyclone requires
+that you either break, return, continue, throw an exception, or explicitly
+fallthru in each case of a switch.  
+\end{porta}
+
+\begin{porta}{port:temp}{Replace one temporary with multiple temporaries.}
+Consider the following code:
+\begin{verbatim}
+void foo(char * x, char * y) {
+  char * temp;
+  temp = x;
+  bar(temp);
+  temp = y;
+  bar(temp);
+}
+\end{verbatim}
+
+When compiled, Cyclone generates an error message like this:
+\begin{verbatim}
+type mismatch: char *@zeroterm #0  != char *@zeroterm #1 
+\end{verbatim}
+
+The problem is that Cyclone thinks that \texttt{x} and \texttt{y}
+might point into different regions (which it named \texttt{\#0} and
+\texttt{\#1} respectively), and the variable \texttt{temp} is assigned
+both the value of \texttt{x} and the value of \texttt{y}.  Thus,
+there is no single region that we can say \texttt{temp} points into.
+The solution in this case is to use two different temporaries for
+the two different purposes:
+\begin{verbatim}
+void foo(char * x, char * y) {
+  char * temp1;
+  char * temp2;
+  temp1 = x;
+  bar(temp1);
+  temp2 = y;
+  bar(temp2);
+}
+\end{verbatim}
+
+Now Cyclone can figure out that \texttt{temp1} is a pointer into
+the region \texttt{\#0} whereas \texttt{temp2} is a pointer into
+region \texttt{\#1}.  
+\end{porta}
+
+\begin{porta}{port:rgns}{Connect argument and result pointers with the same region.}
+Remember that Cyclone assumes that pointer inputs to a function might
+point into distinct regions, and that output pointers, by default point
+into the heap.  Obviously, this won't always be the case.  Consider
+the following code:
+\begin{verbatim}
+int *foo(int *x, int *y, int b) {
+  if (b)
+    return x;
+  else
+    return y;
+}
+\end{verbatim}
+
+Cyclone complains when we compile this code:
+\begin{verbatim}
+foo.cyc:3: returns value of type int *`GR0 but requires int *
+  `GR0 and `H are not compatible. 
+foo.cyc:5: returns value of type int *`GR1 but requires int *
+  `GR1 and `H are not compatible. 
+\end{verbatim}
+The problem is that neither \texttt{x} nor \texttt{y} is a pointer
+into the heap.  You can fix this problem by putting in explicit regions
+to connect the arguments and the result.  For instance, we might write:
+\begin{verbatim}
+int *`r foo(int *`r x, int *`r y, int b) {
+  if (b)
+    return x;
+  else
+    return y;
+}
+\end{verbatim}
+and then the code will compile.  Of course, any caller to this function
+must now ensure that the arguments are in the same region.  
+\end{porta}
+
+\begin{porta}{port:types}{Insert type information to direct the type-checker.}
+Cyclone is usually good about inferring types.  But sometimes, it
+has too many options and picks the wrong type.  A good example is
+the following:
+\begin{verbatim}
+void foo(int b) {
+  printf("b is %s", b ? "true" : "false");
+} 
+\end{verbatim}
+
+When compiled, Cyclone warns:
+\begin{verbatim}
+(2:39-2:40): implicit cast to shorter array
+\end{verbatim}
+
+The problem is that the string \texttt{"true"} is assigned the
+type \texttt{const char ?\{5\}} whereas the string
+\texttt{"false"} is assigned the type \texttt{const char ?\{6\}}.
+(Remember that string constants have an implicit 0 at the end.)
+The type-checker needs to find a single type for both since
+we don't know whether \texttt{b} will come out true or false
+and conditional expressions require the same type for either
+case.  There are at least two ways that the types of the strings can be
+promoted to a unifying type.  One way is to promote both
+to \texttt{char?} which would be ideal.  Unfortunately, Cyclone
+has chosen another way, and promoted the longer string
+(\texttt{"false"}) to a shorter string type, namely
+\texttt{const char ?\{5\}}.  This makes the two types the
+same, but is not at all what we want, for when the procedure
+is called with false, the routine will print
+\begin{verbatim}
+b is fals
+\end{verbatim}
+
+Fortunately, the warning indicates that there might be a problem.
+The solution in this case is to explicitly cast at least one of the two
+values to \texttt{const char ?}:
+\begin{verbatim}
+void foo(int b) {
+  printf("b is %s", b ? ((const char ?)"true") : "false");
+} 
+\end{verbatim}
+
+Alternatively, you can declare a temp with the right type and use
+it:
+\begin{verbatim}
+void foo(int b) {
+  const char ? t = b ? "true" : "false"
+  printf("b is %s", t);
+} 
+\end{verbatim}
+
+The point is that by giving Cyclone more type information, you can
+get it to do the right sorts of promotions.  Other sorts of type
+information you might provide include region annotations (as outlined
+above), pointer qualifiers, and casts.
+\end{porta}
+
+\begin{porta}{port:const}{Copy ``const'' code or values to make it non-const.}
+Cyclone takes \texttt{const} seriously.  C does not.  Occasionally,
+this will bite you, but more often than not, it will save you from
+a core dump.  For instance, the following code will seg fault on
+most machines:
+\begin{verbatim}
+void foo() {
+  char ?x = "howdy"
+  x[0] = 'a';
+}
+\end{verbatim}
+
+The problem is that the string \texttt{"howdy"} will be placed in
+the read-only text segment, and thus trying to write to it will
+cause a fault.  Fortunately, Cyclone complains that you're trying
+to initialize a non-const variable with a const value so this
+problem doesn't occur in Cyclone.  If you really want to initialize
+\texttt{x} with this value, then you'll need to copy the string,
+say using the \texttt{dup} function from the string library:
+\begin{verbatim}
+void foo() {
+  char ?x = strdup("howdy");
+  x[0] = 'a';
+}
+\end{verbatim}
+
+Now consider the following call to the \texttt{strtoul} code in the
+standard library:
+\begin{verbatim}
+extern unsigned long strtoul(const char ?`r n, 
+                             const char ?`r*`r2 endptr,
+                             int base);
+unsigned long foo() {
+  char ?x = strdup("howdy");
+  char ?*e = NULL;
+  return strtoul(x,e,0);
+}
+\end{verbatim}
+
+Here, the problem is that we're passing non-const values to the
+library function, even though it demands const values.  Usually,
+that's okay, as \texttt{const char ?} is a super-type of
+\texttt{char ?}.  But in this case, we're passing as the
+\texttt{endptr} a pointer to a \texttt{char ?}, and it
+is not the case that \texttt{const char ?*} is a super-type
+of \texttt{char ?*}.  In this case, you have two options:
+Either make \texttt{x} and \texttt{e} const, or copy the
+code for \texttt{strtoul} and make a version that doesn't
+have const in the prototype.  
+\end{porta}
+
+\begin{porta}{port:free}{Get rid of calls to free, calloc etc.}
+There are many standard functions that Cyclone can't support 
+and still maintain type-safety.  An obvious one is \texttt{free()}
+which releases memory.  Let the garbage collector free the object
+for you, or use region-allocation if you're scared of the collector.
+Other operations, such as \texttt{memset}, \texttt{memcpy}, 
+and \texttt{realloc} are supported, but in a limited fashion in 
+order to preserve  type safety.  
+\end{porta}
+
+\begin{porta}{port:poly}{Use polymorphism or tagged unions to get rid of void*.}  
+Often you'll find C code that uses \texttt{void*} to simulate
+polymorphism.  A typical example is something like swap:
+\begin{verbatim}
+void swap(void **x, void **y) {
+  void *t = x;
+  x = y;
+  y = t;
+}
+\end{verbatim}
+
+In Cyclone, this code should type-check but you won't be able
+to use it in many cases.  The reason is that while \texttt{void*}
+is a super-type of just about any pointer type, it's not the
+case that \texttt{void**} is a super-type of a pointer to a
+pointer type.  In this case, the solution is to use Cyclone's
+polymorphism:
+\begin{verbatim}
+void swap(`a *x, `a *y) {
+  `a t = x;
+  x = y;
+  y = t;
+}
+\end{verbatim}
+
+Now the code can (safely) be called with any two (compatible)
+pointer types.  This trick works well as long as you only need
+to ``cast up'' from a fixed type to an abstract one.  It doesn't
+work when you need to ``cast down'' again.  For example, consider
+the following:
+\begin{verbatim}
+int foo(int x, void *y) {
+  if (x)
+   return *((int *)y);
+  else {
+    printf("%s\n",(char *)y);
+    return -1;
+  }
+}
+\end{verbatim}
+
+The coder intends for \texttt{y} to either be an int pointer or
+a string, depending upon the value of \texttt{x}.  If \texttt{x}
+is true, then \texttt{y} is supposed to be an int pointer, and
+otherwise, it's supposed to be a string.  In either case, you have
+to put in a cast from \texttt{void*} to the appropriate type,
+and obviously, there's nothing preventing someone from passing
+in bogus cominations of \texttt{x} and \texttt{y}.  The solution
+in Cylcone is to use a tagged union to represent the dependency
+and get rid of the variable \texttt{x}:
+\begin{verbatim}
+@tagged union IntOrString { 
+  int Int;
+  const char *@fat String;
+};
+typedef union IntOrString i_or_s;
+int foo(i_or_s y) {
+  switch (y) {
+  case {.Int = i}:  return i;
+  case {.String = s}:  
+    printf("%s\n",s);
+    return -1;
+  }
+}
+\end{verbatim}
+\end{porta}
+
+\begin{porta}{port:vararg}{Rewrite the bodies of vararg functions.}
+See the section on varargs for more details.  
+\end{porta}
+
+\begin{porta}{port:setjmp}{Use exceptions instead of setjmp.}
+Many uses of \texttt{setjmp}/\texttt{longjmp} can be replaced
+with a \texttt{try}-block and a \texttt{throw}.  Of course,
+you can't do this for things like a user-level threads package,
+but rather, only for those situations where you're trying
+to ``pop-out'' of a deeply nested set of function calls.
+\end{porta}
+
+\subsection{Interfacing to C}
+When porting any large code from C to Cyclone, or even when writing
+a Cyclone program from scratch, you'll want to be able to access
+legacy libraries.  To do so, you must understand how Cyclone
+represents data structures, how it compiles certain features,
+and how to write wrappers to make up for representation mismatches.
+
+\subsubsection{Extern ``C''}
+
+Sometimes, interfacing to C code is as simple as writing
+an appropriate interface.  For instance, if you want to
+call the \texttt{acos} function which is defined in the C
+Math library, you can simply write the following:
+\begin{verbatim}
+  extern "C" double acos(double);
+\end{verbatim}
+
+The \texttt{extern "C"} scope declares that the function is
+defined externally by C code.  As such, it's name is not
+prefixed with any namespace information by the compiler.
+Note that you can still embed the function within a Cyclone
+namespace, it's just that the namespace is ignored by the
+time you get down to C code.  
+If you have a whole group of functions then you can wrap them with
+a single \texttt{extern "C" \{ ... \}}, as in:
+\begin{verbatim}
+  extern "C" {
+    double acos(double);
+    float  acosf(float);
+    double acosh(double);
+    float  acoshf(float);
+    double asin(double);
+  }
+\end{verbatim}
+You must be careful that the type you declare for the C function is
+its real type.  Misdeclaring the type could result in a runtime
+error.  Note that you can add Cyclonisms to the type that refine the
+meaning of the original C.  For example, you could declare:
+\begin{verbatim}
+  extern "C" int strlen(const char * @notnull str);
+\end{verbatim}
+Here we have refined the type of \texttt{strlen} to require that a
+non-NULL pointer is passed to it.  Because this type is
+representation-compatible with the C type (that is, it has the same
+storage requirements and semantics), this is legal.  However, the
+following would be incorrect:
+\begin{verbatim}
+  extern "C" int strlen(const char * @fat str);
+\end{verbatim}
+Giving the function this type would probably lead to an error because
+Cyclone fat pointers are represented as three words, but the standard
+C library function expects a single pointer (one word).
+
+The \texttt{extern "C"} approach works well enough that it covers many
+of the cases that you'll encounter.  However, the situation is not so
+when you run into more complicated interfaces.  Sometimes you will
+need to write some wrapper code to convert from Cyclone's
+representations to C's and back (so called \emph{wrapper} code).
+
+\subsubsection{Extern ``C include''}
+
+Another useful tool is the \texttt{extern "C include"} mechanism.
+It allows you to write C definitions within a Cyclone file.  Here
+is a simple example:
+\begin{verbatim}
+extern "C include" {
+  char peek(unsigned int i) {
+    return *((char *)i);
+  }
+
+  void poke(unsigned int i, char c) {
+    *((char *)i) = c;
+  }
+} export {
+  peek, poke;
+}
+\end{verbatim}
+In this example, we've defined two C functions \texttt{peek} and
+\texttt{poke}.  Cyclone will not compile or type-check their code, but
+rather pass them on to the C compiler.  The \texttt{export} clause
+indicates which function and variable definitions should be exported
+to the Cyclone code.  If we only wanted to export the \texttt{peek}
+function, then we would leave the \texttt{poke} function out of the
+export list.  All all other definitions, like \texttt{typedef}s,
+\texttt{struct}s, etc., not to mention \texttt{\#define}s and other
+preprocessor effects, are exported by default (but this may change in
+a later release).
+
+Any top-level types you mention in the \texttt{extern "C include"} are
+interpreted by the Cyclone code that uses them as Cyclone types.  If
+they are actually C types (as would be the case if you
+\texttt{\#include}d some header in the C block), this will be safe, but
+possibly undesirable, since they may not communicate the right
+information  to the Cyclone code.  There are two ways around this.
+In many cases, you can actually declare Cyclone types within the C
+code, and they will be treated as such.  For example, in
+\texttt{lib/core.cyc}, we have
+For example, you could do something like:
+\begin{verbatim}
+extern "C include" {
+  ... Cyc_Core_mkthin(`a ?`r dyn, sizeof_t<`a> sz) {
+    unsigned bd = _get_dyneither_size(dyn,sz);
+    return Cyc_Core_mktuple(dyn.curr,bd);
+  } 
+} export {
+  Cyc_Core_mkthin
+}
+\end{verbatim}
+In this case, we are able to include a \texttt{?} notation directly in
+the C type, but then manipulate it using the runtime system functions
+for fat pointers (see \texttt{cyc_include.h} for details).
+
+In the case that you are \texttt{\#include}ing a C header file, you
+may not be able to change its definitions to have a proper Cyclone
+type, or it may be that the Cyclone definitions will not parse for
+some reason.  In this case, you can declare a block to \emph{override}
+the definitions with Cyclone compatible versions.  For example, we
+could change the above code to be instead:
+\begin{verbatim}
+extern "C include" {
+  struct foo { int x; int y; };
+  struct foo *cast_charbuf(char *buf, unsigned int n) {
+    if (n >= sizeof(struct foo))
+      return (struct foo *)buf;
+    else
+      return (void *)0;
+  }
+} cyclone_override {
+  struct foo *cast_charbuf
+    (char * @numelts(valueof(`n)) @nozeroterm buf,tag_t<`n> n);
+} export {
+  cast_charbuf
+}
+\end{verbatim}
+Now we have given \texttt{cast_charbuf} its original C type, but then
+provided the Cyclone type in the override block.  The Cyclone type
+ensures the value of \texttt{n} correctly represents the length of the
+buffer, by using Cyclone's dependent types (see
+\sectionref{sec:pointers}).  Note that top-level \texttt{struct} and
+other type definitions can basically be entirely Cyclone syntax.  If
+you try to declare a Cyclone overriding type that is
+representation-incompatible with the C version, the compiler will
+complain.
+
+Here is a another example using an external header:
+\begin{verbatim}
+extern "C include" {  /* tell Cyclone that <pcre.h> is C code */
+#include <pcre/pcre.h>
+} cyclone_override {
+  pcre *`U pcre_compile(const char @pattern, int options,
+                        const char *`H *errptr, int *erroffset,
+                        const unsigned char *tableptr);
+  int pcre_exec(const pcre @code, const pcre_extra *extra, 
+                const char *subject, int length,
+                int startoffset, int options,
+                int *ovector, int ovecsize);
+} export { pcre_compile, pcre_exec; }
+\end{verbatim}
+In this case, we have included the Perl regular expression library C
+header, and then exported two of its functions, \texttt{pcre_compile}
+and \texttt{pcre_exec}.  Moreover, we have given these functions
+Cyclone types that are more expressive in the original C.  Probably we
+would yet want to write wrappers around these functions to check other
+invariants of the arguments (e.g., that the \texttt{length} passed to
+\texttt{pcre_exec} is indeed the length of the \texttt{subject}).
+Take a look at \texttt{tests/pcredemo.cyc} for more information on
+this example.  Another example that shows how you can override things
+is in \texttt{tests/cinclude.cyc}.
+
+The goal of this example is to show how you can safely suck in
+a large C interface (in this case, the Perl Compatible Regular Expression
+interface), write wrappers around some of the functions to convert
+represenations and check properties, and then safely export these
+wrappers to Cyclone.  
+
+One word of warning: when you \texttt{\#include} something within an
+\texttt{extern "C include"}, it will follow the normal include path,
+which is to say that it will look for \emph{Cyclone} versions of the
+headers first.  This means that if you do something like:
+\begin{verbatim}
+extern "C include" {
+#include <string.h>
+} export { ... }
+\end{verbatim}
+It will actually include the Cyclone version of the \texttt{string.h}
+header!  These easiest way around this is to use an absolute path, as
+in
+\begin{verbatim}
+extern "C include" {
+#include "/usr/include/string.h"
+} export { ... }
+\end{verbatim}
+Even worse is when a C header you wish to include itself includes a
+header for which there exists a Cyclone version.  In the
+\texttt{pcre.h} example above, this actually occurs in that
+\texttt{pcre.h} includes \texttt{stdlib.h}, and gets the Cyclone
+version.  To avoid this, the \texttt{pcredemo.cyc} program includes
+the Cyclone versions of these headers first.  Ultimately we will
+probably change the compiler so that header processing within
+\texttt{extern "C include"} searches the C header path but not the
+Cyclone one.

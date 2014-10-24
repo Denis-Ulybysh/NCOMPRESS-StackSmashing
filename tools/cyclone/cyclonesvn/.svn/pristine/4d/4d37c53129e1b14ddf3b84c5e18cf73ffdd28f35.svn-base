@@ -1,0 +1,694 @@
+/* A simple imap server.
+*/
+#include <core.h>
+using Core;
+
+
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/stat.h>
+
+#include <pthread.h>
+
+#include "ykbuf.h"
+#include "sqlite3.h"
+
+#include "imap_scanf.h"
+
+/* TODO: this is not implemented in Cyclone*/
+// void pthread_exit(void *retval);
+extern "C" void pthread_exit(int);
+
+/* TODO: remove/replace */
+void greeting_hook(const char ?x) {}
+void response_hook(const char ?x) {}
+void command_hook(const char ?x) {}
+
+enum state {
+  NOT_AUTHENTICATED,
+  AUTHENTICATED,
+  SELECTED,
+  LOGOUT
+};
+
+enum state server_state;
+
+/*
+  session state: in memory
+  * server_state
+  * user
+  * idle time?
+
+  user state:
+  * subscribed mailboxes     -- in db
+  * current selected mailbox -- in memory
+
+  mailbox state:
+  * set of flags 'applicable to mailbox' -- just support a fixed set
+  * READ-ONLY or READ-WRITE  -- support only READ-WRITE for now
+  * UIDNEXT                  -- in db
+  * UIDVALIDITY              -- in db
+  * messages
+  * number of messages (sql over messages suffices)
+
+  message state: STORE and FETCH imply this:
+  * FLAGS -- in mailbox db
+  * UID -- in mailbox db
+  -- remainder in file (plain rfc822) named after UID
+  * BODY.PEEK[<section>]<<partial>>
+  * BODYSTRUCTURE
+  * ENVELOPE
+  * INTERNALDATE
+  * RFC822
+  * RFC822.HEADER
+  * RFC822.SIZE
+  * RFC822.TEXT
+*/
+/*
+  Directory structure:
+  mail/
+    users.db -- table users(user,password)
+             -- one row per user
+    user/ -- one for each user
+      mailboxes.db -- table mailboxes(mailbox,UIDNEXT,UIDVALIDITY)
+                   -- one row per mailbox
+      mailbox/ -- one for each mailbox
+        messages.db -- table messages(UID,flag)
+                    -- invariant: every message has at least one flag
+        UID -- a message in RFC822
+ */
+
+int step_with_retry(sqlite3_stmt *stmt) {
+  int rc = SQLITE_ERROR;
+  for (let i = 0; i<10 && (rc = sqlite3_step(stmt)) == SQLITE_BUSY; i++)
+    /* Try up to 10 times; BUSY means someone has the lock */
+    ;
+  if (rc == SQLITE_ERROR) {
+    rc = sqlite3_reset(stmt);
+  }
+  return rc;
+}
+
+/* exit if st is not one of the ok_states */
+static void force(int st, ... int ok_states) {
+  for (let i = 0; i < numelts(ok_states); i++) {
+    if (st == ok_states[i]) return;
+  }
+  fprintf(stderr,"Unexpected server state (%d)\n",st);
+  fflush(stderr);
+  pthread_exit(1);
+}
+
+/* Create a directory if it does not already exist,
+   return 0 on success and -1 on failure. */
+static int force_mkdir(const char ?dir) {
+  struct stat st;
+  if (stat(dir, &st))
+    /* stat failed, probably because dir does not exist */
+    return mkdir(dir, 0755);
+  if (!S_ISDIR(st.st_mode)) return -1;
+  return 0;
+}
+
+/* Make sure that a mailbox exists.
+       db: sqlite handle to a user's mailbox database (mailboxes.db)
+       dir: directory where mailbox should exist
+       mailbox: name of the mailbox
+   On error print message to standard out.
+   Return 0 on success and -1 on error.
+ */
+static int force_mailbox(sqlite3 *db,const char ?dir,const char ?mailbox) {
+  /* First see whether the mailbox already exists by looking it up
+     in the mailboxes database*/
+  const char ?sql = NULL;
+  sql = aprintf("select * from mailboxes where mailbox = '%s';",
+                mailbox);
+  sqlite3_stmt *stmt = NULL;
+  int rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+  if (rc != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    /* mailboxes table might not exist in the database, create it... */
+    let sql2 =
+      "create table mailboxes(mailbox varchar(256),"
+      "UIDNEXT integer, UIDVALIDITY integer);";
+    rc = sqlite3_prepare(db, sql2, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr,"Error preparing '%s'\n",sql2);
+      fflush(stderr);
+      return -1;
+    }
+    rc = step_with_retry(stmt);
+    if (rc != SQLITE_DONE) {
+      sqlite3_finalize(stmt);
+      fprintf(stderr,"Error: could not create mailbox %s (%d)\n",mailbox,rc);
+      fflush(stderr);
+      return -1;
+    }
+    /* ... and retry */
+    rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+      sqlite3_finalize(stmt);
+      fprintf(stderr,"Error preparing '%s'\n",sql);
+      fflush(stderr);
+      return -1;
+    }
+  }
+  rc = step_with_retry(stmt);
+  sqlite3_finalize(stmt);
+  if (rc == SQLITE_ROW) return 0; /* Row for mailbox found */
+  if (rc == SQLITE_DONE) {
+    /* mailbox does not yet exist, create it */
+    let mailbox_absolute = aprintf("%s/%s",dir,mailbox);
+    if (force_mkdir(mailbox_absolute)) {
+      fprintf(stderr,"Error: failed to create directory %s\n",
+              mailbox_absolute);
+      fflush(stderr);
+      return -1;
+    }
+    {
+      sqlite3 *db2 = NULL;
+      let mailbox_db = aprintf("%s/messages.db",mailbox_absolute);
+      int rc = sqlite3_open(mailbox_db, &db2); // should create if necessary
+      if (rc) {
+        sqlite3_close(db2);
+        fprintf(stderr, "Error: could not create mailbox %s (%s)\n",
+                mailbox_absolute, sqlite3_errmsg(db2));
+        fflush(stderr);
+        return -1;
+      }
+      sqlite3_close(db2);
+    }
+    /* mailboxes.db gets a row for the new mailbox, UID and UIDVALIDITY at 0 */
+    sql = aprintf("insert into mailboxes values('%s',0,0);",mailbox);
+    rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+      sqlite3_finalize(stmt);
+      fprintf(stderr,"Error: failed to prepare \"%s\" (%s)\n",
+              sql, sqlite3_errmsg(db));
+      fflush(stderr);
+      return -1;
+    }
+    rc = step_with_retry(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+      fprintf(stderr,
+              "Error: \"%s\" did not finish in one step (error code %d, %s)\n",
+              sql,rc,sqlite3_errmsg(db));
+      fflush(stderr);
+      return -1;
+    }
+    return 0; /* We successfully created the row */
+  }
+  if (rc == SQLITE_BUSY) {
+    fprintf(stderr,"Error: failed to create %s (mailboxes.db is locked)\n",
+            mailbox);
+    fflush(stderr);
+    return -1;
+  }
+  /* Some other kind of error creating the row */
+  fprintf(stderr,"Error: failed to create %s in mailboxes.db (%s)\n",
+          mailbox, sqlite3_errmsg(db));
+  fflush(stderr);
+  return -1;
+}
+
+static int authorized(const char ?user,const char ?passwd) {
+  sqlite3 *db = NULL;
+  char *zErrMsg = NULL;
+  int rc = sqlite3_open("mail/users.db", &db); // should create if necessary
+  if (rc) {
+    fprintf(stderr, "Error: can't open mail/users.db (%s)\n", sqlite3_errmsg(db));
+    sqlite3_close(db);
+    pthread_exit(1);
+  }
+  /* TODO: make sure user does not yet exist */
+  const char ?sql = NULL;
+  sql = "select * from users;";
+  sqlite3_stmt *stmt = NULL;
+  rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+  if (rc != SQLITE_OK) {
+    // Users table might not exist.
+    sql = "create table users(user varchar(256),password varchar(256));";
+    rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr,"Error preparing '%s'\n",sql);
+      sqlite3_close(db);
+      pthread_exit(1);
+    }
+    rc = step_with_retry(stmt);
+    if (rc != SQLITE_DONE) {
+      fprintf(stderr,"Error: create_table did not finish in one step (%d)\n",rc);
+      sqlite3_close(db);
+      pthread_exit(1);
+    }
+  }
+  // Invariant: users() now exists
+  sql = aprintf("select * from users where user = '%s';",user);
+  rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr,"Error preparing '%s' (%d)\n",sql,rc);
+    sqlite3_close(db);
+    pthread_exit(1);
+  }
+  rc = step_with_retry(stmt);
+  if (rc == SQLITE_ROW) {
+    // User has a password, check to see if equal
+    let real_password = sqlite3_column_text(stmt,1);
+    fprintf(stderr,"User %s has real password %s and attempting %s\n",
+            user,real_password,passwd);
+    fflush(stderr);
+    return !strcmp(real_password,passwd);
+  }
+  fprintf(stderr,"User %s does not yet have a password\n",user);
+  fflush(stderr);
+
+  // User does not have a password.  Just add it.  Unencrypted.
+  // TODO: this is where we should return 0.  // NB db is open
+  sql = aprintf("insert into users values('%s','%s');",user,passwd);
+  rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+  if (rc != SQLITE_OK) {
+    fprintf(stderr,"Error preparing '%s' (%s)\n",sql,sqlite3_errmsg(db));
+    fflush(stderr);
+    sqlite3_close(db);
+    pthread_exit(1);
+  }
+  rc = step_with_retry(stmt);
+  if (rc != SQLITE_DONE) {
+    fprintf(stderr,
+            "Error: \"%s\" did not finish in one step (error code %d, %s)\n",
+            sql,rc,sqlite3_errmsg(db));
+    fflush(stderr);
+    sqlite3_close(db);
+    pthread_exit(1);
+  }
+  sqlite3_close(db);
+  return 1;
+}
+
+/* handle a single session */
+static int session_handler(int fd) {
+
+  ykbuf_t @inbuf = fd2ykbuf(fd);
+  FILE *outbuf = fdopen(fd,"w");
+  if (outbuf == NULL) {
+    perror("Error on fdopen");
+    pthread_exit(1);
+  }
+  fprintf(stderr,"Handling new session\n");
+  fflush(stderr);
+
+  server_state = NOT_AUTHENTICATED;
+
+  sqlite3 *db = NULL; // handle for user/mailboxes.db
+  const char ?username = NULL;
+  const char ?user_mail_dir = NULL;
+
+  fprintf(outbuf,"* OK Cyclone IMAP server\r\n");
+  fflush(outbuf);
+
+  const char ?tag = NULL;
+  const char ?val1 = NULL;
+  const char ?val2 = NULL;
+
+  int c = 0;
+  while (server_state != LOGOUT) {
+    force(server_state,NOT_AUTHENTICATED,AUTHENTICATED,SELECTED);
+
+//     if (command_scanf(inbuf,"(command %tag CAPABILITY)",&tag))
+    if (-1 != command_scanf(inbuf,"(command T CAPABILITY)",&tag))
+      {
+	/* (CAPABILITY tag) */
+        fprintf(stderr, "Received CAPABILITY\n");
+	fprintf(outbuf,"* CAPABILITY IMAP4rev1\r\n");
+	/* TODO: Also send other capabilities */
+	fprintf(outbuf,"%s OK CAPABILITY completed\r\n",tag);
+	fflush(outbuf);
+      }
+    else if (-1 != command_scanf(inbuf,"(%r NOOP)",&tag)){
+      /* (NOOP tag) */
+      /* TODO: do stuff like renew timeout, report status */
+      fprintf(stderr, "Received NOOP\n");
+      fprintf(outbuf,"%s OK NOOP completed\r\n",tag);
+      fflush(outbuf);
+      }
+    else if (-1 != command_scanf(inbuf,"(command %r LOGOUT)",&tag)){
+      /* (LOGOUT tag) */
+      fprintf(outbuf,"* BYE Cyclone IMAP server logging out\r\n");
+      fprintf(outbuf,"%s OK LOGOUT completed\r\n",tag);
+      fflush(outbuf);
+      fprintf(stderr,"LOGOUT\n");fflush(stderr);
+      server_state = LOGOUT;
+    }
+//     else if (command_scanf(inbuf,"(command %tag %login)",&tag,&val1)){
+    else if (-1 != command_scanf(inbuf,"(command %r (login %r %r))",&tag,&val1,&val2)) {
+      /* (LOGIN tag username password) */
+      force(server_state,NOT_AUTHENTICATED);
+      username = val1;
+      const char ? password = val2;
+/*
+  // In order to parse in this manner, we would need to generate the imap parsing functions with
+  // the -all-start option (just as we do for the termgrammar parsing functions.
+      if (!login_scanf(string2ykbuf(val1),"(login %userid %password)",&username,&password)){
+	fprintf(stderr, "Received LOGIN but failed to parser (from %s).\n",val1);
+      } else
+	fprintf(stderr, "Received LOGIN with %s:%s from %s.\n",username,password,val1);
+*/
+      fprintf(stderr, "Received LOGIN with %s:%s.\n",username,password);
+      fflush(stderr);
+
+      if (!authorized(username,password)) {
+	fprintf(outbuf,"%s NO LOGIN failed\r\n",tag);
+	fflush(outbuf);
+	/* Back to top of loop */
+      } else {
+	fprintf(outbuf,"%s OK LOGIN completed\r\n",tag);
+	fflush(outbuf);
+	server_state = AUTHENTICATED;
+
+	/* Force some invariants on user state */
+	user_mail_dir = aprintf("mail/%s",username);
+	if (force_mkdir(user_mail_dir)) {
+	  fprintf(stderr, "Could not create %s directory\n", user_mail_dir);
+	  fflush(stderr);
+          fprintf(outbuf,"%s NO LOGIN failed\r\n",tag);
+	  fclose(outbuf);
+	  pthread_exit(1);
+	}
+
+	let user_mailbox_db = aprintf("%s/mailboxes.db",user_mail_dir);
+	char *zErrMsg = NULL;
+	int rc = sqlite3_open(user_mailbox_db, &db); // should create if necessary
+	if (rc) {
+	  sqlite3_close(db);
+	  fprintf(stderr,"Can't open %s: %s\n",
+		  user_mailbox_db,sqlite3_errmsg(db));
+          fflush(stderr);
+	  pthread_exit(1);
+	}
+        if (force_mailbox(db,user_mail_dir,"INBOX")) {
+	  sqlite3_close(db);
+          fprintf(outbuf,"%s NO LOGIN failed\r\n",tag);
+	  fclose(outbuf);
+	  pthread_exit(1);
+        }
+        // NB open database handle db
+      }
+    }
+
+    else if (-1 != command_scanf(inbuf,"(command %tag STARTTLS)",&tag)){
+      /* (STARTTLS tag) */
+      force(server_state,NOT_AUTHENTICATED);
+      /* TODO */
+    }
+
+    else if (-1 != command_scanf(inbuf,"(command %tag %authenticate)",&tag,&val1)) {
+      /* (AUTHENTICATE tag methodname) */
+      force(server_state,NOT_AUTHENTICATED);
+      const char ?type=NULL, ?stuff=NULL;
+      authenticate_scanf(string2ykbuf(val1),"(authenticate %auth-type %authenticate__elt_4)",&type,&stuff);
+
+      /* TODO */
+    }
+//     else switch (c) {
+//     case 6:
+//       /* (SELECT tag mbox_name) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO:
+//          select the mailbox (deselect any selected mailbox first)
+//          send flags defined in mailbox
+//          send number of messages in mailbox
+//          send number of "recent" messages in mailbox
+//          send message number of first unseen message if available
+//          send PERMANENTFLAGS
+//          send UIDNEXT, the next unique identifier value
+//          send UIDVALIDITY, the unique identifier validity value.
+//          figure out whether mailbox is READ-ONLY or READ-WRITE
+//          send tagged ok with permissions
+//       */
+//       break;
+
+//     case 7:
+//       /* (EXAMINE tag mbox_name) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          Just like SELECT but forces READ-ONLY
+//        */
+//       break;
+
+    else if (-1 != command_scanf(inbuf,"(command %tag (create %mailbox))",&tag,&val1)){
+      /* (CREATE tag mbox_name) */
+      force(server_state,AUTHENTICATED,SELECTED);
+
+      let new_mailbox = val1;
+      if (force_mailbox(db,user_mail_dir,new_mailbox)) {
+        fprintf(outbuf,"%s NO CREATE failed\r\n",tag);
+        fflush(outbuf);
+      }
+      else {
+        fprintf(outbuf,"%s OK CREATE completed\r\n",tag);
+        fflush(outbuf);
+      }
+      /* TODO
+         do not allow creation of a mailbox named mailboxes.db
+         not allowed to create INBOX which is case insensitive
+         not allowed to create an existing mailbox
+         need to figure out mailbox heirarchies
+         need to make sure "weird" chars don't get used in name
+         need to make sure UIDs change if we create a mailbox
+           that was previously deleted
+      */
+    }
+
+//     case 9:
+//       /* (DELETE tag mbox_name) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          delete the mailbox
+//        */
+//       break;
+//     case 10:
+//       /* (RENAME tag mbox_name mbox_name1) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          rename mailbox mbox_name to mbox_name1
+//        */
+//       break;
+//     case 11:
+//       /* (SUBSCRIBE tag mbox_name) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          add the mailbox to the list of subscribed mailboxes
+//        */
+//       break;
+//     case 12:
+//       /* (UNSUBSCRIBE tag mbox_name) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          remove the mailbox from the list of subscribed mailboxes
+//       */
+//       break;
+
+    else if (-1 != command_scanf(inbuf,"(command %tag (list %mailbox %list-mailbox))",&tag,&val1,&val2)){
+//       /* (LIST tag reference_name mbox_name) */
+       force(server_state,AUTHENTICATED,SELECTED);
+       const char ?sql = NULL;
+       sql = aprintf("select * from mailboxes where mailbox = '%s';",
+                     val1);
+       sqlite3_stmt *stmt = NULL;
+       int rc = sqlite3_prepare(db, sql, -1, &stmt, NULL);
+       if (rc != SQLITE_OK) {
+         sqlite3_finalize(stmt);
+         fprintf(outbuf,"%s NO LIST failed\r\n",tag);
+         fflush(outbuf);
+       }
+
+//       /* TODO
+//          list mailboxes.  reference_name is the empty string or a
+//          mailbox name.  mbox_name is a pattern that should match mailbox
+//          names.  reference_name is like a directory, mbox_name is
+//          for 'files' in the directory.
+//       */
+
+    }
+
+//     case 14:
+//       /* (LSUB tag reference_name mbox_name) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          use reference_name and mbox_name to get a set of mailbox names
+//          as in LIST.  return the subset of the names that are on the
+//          subscribed list.
+//        */
+//       break;
+//     case 15:
+//       /* (STATUS tag mbox_name status_item1 ...) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          return status of the mailbox.
+//          requested status items can be
+//          MESSAGES, RECENT, UIDNEXT, UIDVALIDITY, UNSEEN
+//       */
+//       break;
+//     case 16:
+//       /* (APPEND tag mbox_name (optional args) literal) */
+//       force(server_state,AUTHENTICATED,SELECTED);
+//       /* TODO
+//          add a new message to the mailbox
+//        */
+//       break;
+
+//     case 17:
+//       /* (CHECK tag) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          take a checkpoint, if that makes sense
+//        */
+//       break;
+//     case 18:
+//       /* (CLOSE tag) */
+//       force(server_state,SELECTED);
+//       server_state = AUTHENTICATED;
+//       /* TODO
+//          remove all \Deleted messages from mailbox
+//        */
+//       fprintf(outbuf,"%s OK CLOSE completed\r\n",tag);
+//       fflush(outbuf);
+//       break;
+//     case 19:
+//       /* (EXPUNGE tag) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          remove all \Deleted messages from mailbox
+//          send what messages are deleted
+//        */
+//       fprintf(outbuf,"%s OK EXPUNGE completed\r\n",tag);
+//       fflush(outbuf);
+//       break;
+//     case 20:
+//       /* (SEARCH tag [charset] criteria1 ...) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          search mailbox for messages matching criteria
+//          send numbers of matching messages
+//        */
+//       fprintf(outbuf,"%s OK SEARCH completed\r\n",tag);
+//       fflush(outbuf);
+//       break;
+//     case 21:
+//       /* (FETCH tag sequence_set items) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          fetch pieces of messages.  complicated, see STORE.
+//       */
+//       break;
+//     case 22:
+//       /* (STORE tag sequence_set items values) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          store pieces of messages.  complicated, see FETCH.
+//        */
+//       break;
+//     case 23:
+//       /* (COPY tag sequence_set mbox_name) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          copy a set of messages to the end of a mailbox
+//          kind of like APPEND
+//        */
+//       break;
+//     case 24:
+//       /* (UID tag command args) */
+//       force(server_state,SELECTED);
+//       /* TODO
+//          if command is COPY, FETCH, STORE then do it, using UIDs
+//            instead of message sequence numbers.
+//          if command is SEARCH, do the search but return UIDs
+//            instead of message sequence numbers.
+//        */
+//       break;
+
+//     default: /* Should not be necessary */
+//       /* Might have experimental commands */
+//       /* Distinguish between commands that parse and garbled input? */
+//       pthread_exit(1);
+//       break;
+//     }
+    else {
+      fprintf(stderr,"Could not recognize command.\n");
+      fclose(outbuf);
+      pthread_exit(1);
+    }
+  }
+  // TODO: this line can raise a Null pointer exception.
+  sqlite3_close(db);
+  return close(fd);
+}
+
+/* Wait for connection, when it comes, spawn a thread */
+static void server(int port) {
+  int listenfd, connfd;
+  pid_t childpid;
+  socklen_t clilen;
+  struct sockaddr_in cliaddr, servaddr;
+
+  listenfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (listenfd < 0) {
+    fprintf(stderr, "Error opening socket\n");
+    exit(1);
+  }
+  bzero((_?)&servaddr,sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  servaddr.sin_port = htons(port);
+  if (bind(listenfd, &servaddr, sizeof(servaddr)) < 0) {
+    fprintf(stderr, "Error binding socket\n");
+    exit(1);
+  }
+  if (listen(listenfd, 64) < 0) {
+    fprintf(stderr, "Error listening on socket\n");
+    exit(1);
+  }
+  fprintf(stderr, "Server started on port %d\n",port);
+
+  while (1) {
+    clilen = sizeof(cliaddr);
+    connfd = accept(listenfd, &cliaddr, &clilen);
+    if (connfd < 0) {
+      perror("Error on accept");
+      fflush(stderr);
+      continue;
+    }
+    fprintf(stderr,"New connection\n");
+    fflush(stderr);
+
+    pthread_t pid;
+    let res = pthread_create(&pid,NULL,session_handler,connfd);
+    if (res != 0) {
+      fprintf(stderr,"Error on pthread_create"); // NB no perror for pcreate_*
+      fflush(stderr);
+    }
+  }
+}
+
+int main(int argc, mstring_t<`H>? argv) {
+  if (argc > 2) {
+    fprintf(stderr, "Usage: %s [port]\n", argv[0]);
+    exit(1);
+  }
+  if (force_mkdir("mail")) {
+    fprintf(stderr, "%s: could not create mail directory\n", argv[0]);
+    exit(1);
+  }
+  int port = 143;
+  if (argc == 2) port = atoi(argv[1]);
+  server(port);
+  return 0;
+}

@@ -1,0 +1,877 @@
+Cyclone Release Notes:
+
+This file explains some of the changes that occurred in between releases.
+----------------------------------------------------------------------
+Changes going from Version 0.9 dated May 2005, to version 1.0 dated
+April 2006.
+
+* vcgen is much improved --- includes @assert, interprocedural
+summaries, @no_throw clauses on function ... 
+
+* The form of region qualifiers is changed to include sets of region
+names. Removed the outlives relation on regions in favor of "effect
+constraints" that encode subset constraints. 
+
+* Primitive support for an inference mode that does a whole-program
+analysis to infer fat/thin pointer qualifier. This includes an eclipse
+plugin mode.
+
+** many many bug fixes.
+----------------------------------------------------------------------
+Changes going from Version 0.8.1 dated June 2004, to version 0.9 dated
+May 2005.
+
+* Support for reaps using @aqual() qualifiers on pointers. Alias
+restricted pointers can now refer toany region. See SCP Special Issue
+on Memory Management.
+
+* function attribute noconsume replaced by consume which is implied by
+  noliveunique
+
+* autorelease pools for reference counting
+
+* current region `C means you don't have to pass around region handles
+as much as previously.
+
+* support for Tempest mode -- uses fat pointers by default
+
+* "extern "C include" { ... } cyclone_override { ... }" construct
+that provides an alternative means of interfacing with C. 
+
+* support for gcc-style asm expressions 
+
+* variable names are preserved through code generation to make working
+with gdb easier.
+
+** many many bug fixes.
+
+----------------------------------------------------------------------
+Changes going from Version 0.8 dated May 2004, to version 0.8.1 dated
+June 2004.
+
+* Fixed bugs regarding treatment of NULL in coercions from thin
+  pointers to fat pointers.
+----------------------------------------------------------------------
+Changes going from Version 0.7 dated February 2004, to version 0.8,
+May 2004.
+
+* Added doc/ directory to the distribution, which includes
+  * source for the user manual
+  * emacs .el files for syntax highlighting
+
+* Various improvements to zero-terminated pointers:
+  * allow swapping NULL into a zero-terminated array.
+  * improved code generation to reduce dynamic checks, particularly when
+    doing pointer arithmetic to iterate through the array.
+
+* Added features to aprof region profiler
+  * more control over colors, appearance of GC markers, axis scaling
+
+* Modifications to buildlib to support cross-compiling to Nintendo
+  Gameboy. 
+
+* Other small improvements
+  * improved parser error messages (somewhat)
+  * added support for the __extension__ attribute
+  * permit dereferencing function pointer before a call.
+  * allow creating of fat pointers known to be out of bounds at
+    compile-time: now issue a warning rather than signalling an error.
+
+* Various bug fixes:
+  * compiler was not properly enforcing const when doing pointer
+    dereferences.
+  * the -o command-line flag is no longer sensitive to argument order.
+  * no longer allow assignments or function calls in where clauses in
+    patterns (following &&) to avoid evaluation order issues.
+  * some uses of typeof(e) form were not compiling properly.
+  * now avoid throwing exceptions in compiler due to cascading errors.
+  * fixed bug in array bounds check elimination that was eliminating
+    some checks illegally
+  * fixed bug in dynamic regions: was allowing an opened dynamic region to
+    outlive an enclosed, opened dynamic region.
+  * fixed problem preventing automatic coercion of float constants to
+    doubles when initializing arrays.
+  * fixed small bugs in the dict and string library files
+
+* Restructurings of the compiler and runtime system
+  * broke out code generation for the initialization of aggregates and
+    arrays into a separate pass (remove-aggregates.cyc) following the rest
+    of code generation (toc.cyc) 
+  * created file runtime_zeroterm.c to contain routines for zero-terminated
+    pointers.  runtime_internal.h srves as interfce between various runtime
+    files.  Cleaned up cyc_include.h
+  * removed use of lexical regions from flow analysis (now just heap)
+
+----------------------------------------------------------------------
+Changes going from Version 0.6 dated September 2003, to Version 0.7,
+February 2004.
+
+* Forced Cyclone's evalation order to be right-to-left for assignments, but
+  otherwise left-to-right.  Before it was basically undefined (matching C).
+  This allows the flow analysis to be a bit more precise, and eliminate a
+  few more dynamic checks.
+
+* Added support for building cross-compilers.  Do:
+
+  ./configure --target=<whatever>
+  make
+  make install
+	
+  Then you can invoke the cyclone cross compiler as
+	
+  cyclone -b <whatever> foo.cyc
+
+* Updated buildlib to permit some customization of included types.  In
+  particular, users can provide suggested types that are
+  "representation-compatible" with their C versions, but add useful
+  qualifiers, like @zeroterm, or @nonnull.  Removed cyclone versions of
+  grp.h and pwd.h, in favor of libc.cys specifications.
+
+* Enhancements to the runtime allocator:
+  * Rewrote the allocation routines to be a little faster, especially for
+    the case where you're allocating in a region.
+  * Added support for rmalloc_inline(r,e).  This calls a version of rmalloc
+    that should be inlined and work relatively fast for non-heap, non-rc,
+    non-unique allocation.
+  * In addition, when compiling the output of the compiler, you can pass the
+    flag -DCYC_NOALIGN and this will cause us to skip the padding that is
+    usually added for alignment.  This flag should only be used on
+    architectures where alignment isn't necessary.
+
+* Changed how e1 :=: e2 (atomic swap of e1 and e2) is compiled.  Now assumes
+  a single-threaded implementation, and takes place in the code generator,
+  rather than the runtime, for better efficiency and to avoid a GCC bug.
+
+* Updated runtime system so that drop_refptr, refptr_count, and ufree take
+  thin pointers rather than fat ones.  The alias_refptr routine still takes
+  a fat pointer so that curr/base/bounds information is preserved in the
+  alias.
+
+* Changed argument processing in the compiler so that by default, arguments
+  not known to Cyclone are passed to gcc.  Call compiler with
+  -known-gcc-flags-only to treat unknown arguments as errors.
+
+* Reorganized how compiler warnings are emitted so that -Woverride, -Wall
+  and default warnings are more sensible.
+
+* Updated Cyclone testing suite to be a bit more complete and principled.
+
+* Added the GCC extension typeof(e) and __typeof__(e) as types.  This is
+  supposed to type-check the expression e, and then return its type.
+
+* Changed some library functions to work better with unique and
+  reference-counted pointers.  
+
+* Removed reset-region functionality, which is now subsumed by dynamic
+  regions. 
+
+* Added a special expression form __cyclone_pragma__(p), used for verbose
+  debuggin of the compiler.  We currently support p == "print_flow" to print
+  out the state of the flow analysis.  For example, you can do:
+
+    void foo() {
+      int x;
+      __cyclone_pragma__(print_flow);
+      x = 2;
+      __cyclone_pragma__(print_flow);
+    }
+
+  This will print out the flow dictionary at each of the two points.
+  Because it's an expression form, you can put it in sequence expressions,
+  etc.  In terms of code generation, this directive is identical to the
+  constant 0.
+
+* Changes to the structure of the implementation 
+  * Broken things into more passes: binding resolution pass that deals with
+    namespaces broken out of the typechecker and now resides in binding.cyc.
+    This infrastructure is shared by the lexer.  Checking that jumps,
+    breaks, etc. never enter scopes, have proper targets, etc. now done in
+    jump_analysis.cyc; this used to be in the flow analysis.  Finally, code
+    generation for ensuring proper evaluation order is done as a separate
+    pass following normal code generation.  As a consequence of these
+    changes, type-checking environments were signficantly simplified.
+  * Factored runtime system, formerly in the file lib/runtime_cyc.c, into a
+    number of files, all linked into the library runtime_cyc.a.  The goal is
+    to permit easier customization of runtime system elements for different
+    platforms.  Separate files are for region and exception lifetime
+    management (runtime_stack.c), memory management (runtime_memory.c),
+    exception handling (runtime_exception.c), and main (runtime_cyc.c).
+  * Changed the way pattern matching is compiled.  A decision tree is
+    generated in tcpat.cyc, which is then used in toc.cyc to emit switches,
+    if-then-elses, and gotos as necessary.
+  * Changed how the flow analysis tracks unique pointers.  Now we represent
+    a unique pointer as a pointer tree, rather than a pointer to a (possibly
+    shared) separate place.
+  * "Un-regionified" many parts of the compiler.  These datastructures live
+    essentially for the duration of compilation, so region-allocating them
+    was pointless and just added clutter.
+  * We now "embrace" the use of gcc-specific statement expressions during
+    code generation.
+
+* Bug fixes and small enhancements
+  * improved error messages for the parser by associating canned messages
+    with particular parser states.
+  * improved support for extern "C include" to be more C friendly (notably
+    for Linux kernel headers).
+  * fixed the rewriting portion of the porting tool write annotations in the
+    correct spots, accounting for weirdness in cpp.
+  * regions of unique kind (UR) other than `U are now tracked properly.
+  * fixed flow analysis to eliminate a few more null checks.
+  * Bison line numbering was a bit off, affected line numbers reported on
+    errors in files generated by bison. 
+  * now process switch clauses from top to bottom (rather than bottom to
+    top) for better error messages.
+
+----------------------------------------------------------------------
+Changes going from Version 0.5 dated 14 April 2003, to Version 0.6,
+September 2003.
+
+* Updated documentation for unique pointers, reference counted
+  pointers, and dynamic regions.  See also the paper
+  "Safe and Flexible Memory Management in Cyclone", 
+  Univ. of Maryland Technical Report CS-TR-4514 (available on
+  the Cyclone web page.)
+
+* Reworked how we do constraint checking in the flow analysis.
+  We now track relations ==, !=, <, <=, >, and >= for constants,
+  non-escaping local variables, numelts(x) where x is a non-escaping
+  local variable, and type-level integers.  We use a variant of
+  Pratt's algorithm to check the satisfiability of the constraints.
+  This makes bounds-check elimination a lot better than it was before.
+
+* Added support for type-safe, untagged unions.  As a simple
+  example, one can write:
+
+    union Foo<`i::I> {
+      int *x  @requires valueof(`i) >= 3;
+      int y;  @requires valueof(`i) < 3;
+    };
+
+    int foo_to_int(tag_t<`i> tag, union Foo<`i> f) {
+      if (tag >= 3) return *f.x;
+      else return f.y;
+    }
+
+    struct TaggedFoo {
+      <`i::I>
+      tag_t<`i> tag;
+      union Foo<`i> foo;
+    }
+
+  In the example above, the @requires clauses are predicates that
+  must be proven to be true before the given member can be accessed.
+  For instance, Foo.x can only be accessed when valueof(`i) >= 3.
+  The @requires clauses can only mention conjunctions of relations
+  that the flow analysis can deal with (see above) and the relations
+  must be mutually exclusive (this is checked by the type-checker.)
+
+  In the example above, a value of type tag_t<`i> is passed to
+  foo_to_int along with a union Foo<`i>.  The explicit test
+  that the tag >= 3 is enough for the flow analysis to determine
+  that valueof(`i) >= 3, hence in the then-clause, we are able
+  to access the x component of the Foo object.  Dually, in the
+  else-clause, we know valueof(`i) < 3 so we can access the 
+  y component.  In general, you'll need to pass around a tag_t<`i>
+  somewhere and test it according to the @requires clauses to
+  access a component.  So, the tag isn't really eliminated, but
+  rather made explicit.
+
+  Note that you can always package up a tag and union using
+  an existential struct (as in struct TaggedFoo above).  
+
+* Added attribute __noconsume(i)__ to specify that the ith argument
+  of a function, which must be a unique pointer, is not consumed by
+  executing the function.  So, the caller retains access to the 
+  unique pointer after the call.
+
+* Some changes to buildlib and the compiler to better support 
+  cross-compilation.
+
+* Simpler design for dynamic regions.  See include/core.h and the
+  documentation for details.  Short story -- dynamic regions are
+  represented by a key which is either a unique or reference-
+  counted pointer.  To access the region, you have to open the
+  key as in "{region h = open(k); ...}".  This consumes the key
+  throughout the scope of the open, but you get the key back
+  after the open.  You can free the key explicitly (outside of
+  the open).  If you want to share the dynamic region, then you
+  put the key into a shared data structure (e.g., a global).
+  To get it out, you'll have to swap (with NULL).  
+
+* We now compile the genfiles with -O (except for the parser which
+  takes too long to compile.)  You can build the system with
+  make OPTFLAG=-O3 to turn the optimization up (or -g to turn
+  it down).
+
+* When you compile with -nogc on Linux and OSX, you get the Lea allocator
+  (which tends to work better).
+  
+* New warning -Woverride warns if a new local variable declaration
+  or pattern variable hides a variable.  
+
+* A set of regression tests was added for the type-checker
+  to check for type errors that should occur.
+  See tests/fail<n>.cyc and the corresponding tests/fail<n>.out
+
+* Much work done on the allocation profiler.  
+
+* Flow analysis now understands pattern matching, which allows
+  us to match effectively with unique pointers and to better
+  track NULL/not-NULL through pattern matching.  
+
+* Added some useful functions to Core for exceptions:  
+    // returns the exception name as a string
+    const char *get_exn_name(datatype exn@)
+    // returns the file name of where the last exception was thrown
+    const char *get_exn_filename();
+    // returns the line number of where the last exception was thrown
+    int get_exn_lineno();
+    // re-throws an exception without resetting the file/line number
+    // information.
+    void rethrow(datatype exn@);
+
+  Typical use is something like this:
+
+     try { ... } catch { 
+     case e: 
+       fprintf(stderr,"exception %s from file %s, line %s was thrown\n",
+               get_exn_name(e), get_exn_filename(), get_exn_lineno());
+       rethrow(e);
+     }
+
+* Region order constraints are now checked at instantiation instead
+  of at the function call.  This allowed us to modify the Fn library
+  so that the types are simpler and more general (e.g., curry now
+  works properly.)
+
+* Updates to libc.cys:  got rid of definitions of __uint16_t__, 
+  and _fd_set_hack and related types that were wrapped in #ifdef's 
+  for Cygwin, FreeBSD, and MacOSX since they finally got this right.
+
+* Nested aggregates can now deal with the last element of an
+  aggregate being abstract.  
+
+* Generalized offsetof(t,fs) so that any number of projections
+  can be used (e.g., offsetof(struct Foo,b.x.y.z))
+
+* The Xarray library now uses unique pointers so that when it
+  resizes, it can throw away the old version of the array.  
+  Clients should call reuse() to reclaim the array (or else
+  let the collector reclaim it.)
+
+* Better support for structs that are terminated with an array of
+  indefinite size.  In particular, we now support something like:
+
+  struct Ptr {
+    <`i::I>  // `i is an abstract, integer-level type variable
+    tag_t<`i> size;       // size is an integer with value `i
+    double elts[valueof(`i)]; // elts is an array with `i elements
+  }
+
+  double sum(struct Ptr @p) {
+    double res = 0.0;
+    let &Ptr{.size = s, .elts = es} = p;
+    for (unsigned i = 0; i < s; i++)
+      res += es[i];
+    return res;
+  }
+
+* Changed the way pattern matching is compiled so that we
+  don't introduce so many temporary variables and avoid copying
+  structs so much.
+
+* The alias construct is now part of pattern matching.  For
+  instance, one can write:
+
+  void foo($(int@`U, int) arg) {
+    { let $(alias<`r> int*`r x, y) = arg; ... }
+    ufree(arg[0]);
+    ...
+  }
+
+  If at the end of the scope for the pattern a unique pointer
+  that has been aliased is still defined, then you get it back.
+
+* Bug fixes and small enhancements:
+  * fix for ++x where x is a zero-terminated pointer.
+  * fix for const char foo[3] = "foo" at top-level (inserted cast).
+  * fix for macros that check for zero in zero-terminated pointers..
+  * alias construct is now type-checked properly.
+  * minor fix in subtyping machinery
+  * fix in code generator for polymorphic struct initializers at top-level.
+  * fix in code generator where we were trying to enforce array
+    bounds within sizeof(-) expressions.
+  * got rid of more GCC warnings by putting in more casts.
+  * no longer allow an array comprehension of larger size to
+    be used to initialize an array, so as to avoid an overrun.
+  * fix in memcmp
+  * fix in pretty-printer/dumper allows us to build on FreeBSD.
+  * fix for effective const qualifiers in lvalues.
+  * fix in pattern matching for enums (treated as integers now)
+  * fix in line number information for error messages
+  * cleanup of array promotion code.
+  * flow analysis can now report errors for many functions instead
+    of just one.
+  * clean up for code generator on comprehensions
+  * better null-check elimination for unique pointers.
+  * now check fall-off for functions in flow analysis instead of type-checker
+  * fix in code generator for null-checks
+  * allow any type expression to be parsed in a capability
+  * Some better support for signals and mmap.
+  * Allow semi-colon after a top-level function definition.
+  * Allow labels on declarations.  
+----------------------------------------------------------------------
+Changes going from Version 0.4 dated 1 January 2003, to Version 0.5:
+
+* Configuration is based on autoconf so should work a bit better.
+
+* Change to use a minimal "boot" library should make it easier to
+  bootstrap on new systems.
+
+* We now emit # <line> <file> directives in the generated C code
+  when you use the ugly printer (by default).  This helps for 
+  debugging the code with GDB or using other tools such gprof.
+
+* We have improved support for allocation profiling and the
+  aprof tool now supports generating gnu-plot and svg graphs.
+
+* We now print out from what file and line number an uncaught
+  exception was thrown.
+
+* You can now have a struct whose last member is abstract.  For
+  instance, you can define:
+
+  struct Sequence<`a> {
+    struct Sequence<`a> * next;
+    `a value;
+  };
+
+  Here, `a can be instantiated with any type, not just a boxed
+  type.  So, for instance, you can have a sequence of doubles,
+  or a sequence of structs or tuples, etc.  This is extremely
+  useful for avoiding the need to box something.  
+
+* Enums can now have dependencies (e.g., enum Foo { X = 1, Y = X }).
+
+* Upgraded to latest version of Boehm's collector.
+
+* The lexer generator now supports taking an additional, user-specified
+  argument.
+
+* The XML library now allows for allocating the result into a region
+  instead of the heap.
+
+* Support for float, double, and long double constants and patterns.
+
+* Support for wide character literals and strings.
+
+* bison uses growable arrays instead of a (large) fixed-size array.
+  Also, you can region-allocate the semantic values now.
+
+* Preliminary support for reference counted pointers -- see 
+  tests/refcnt_test.cyc.  Documentation forthcoming.
+
+* Many fixes to make qualifiers better.  In particular, they are
+  propagated correctly for typedefs and not dropped in so many
+  places.
+
+* Lots of bug fixes -- too many to mention but the bigger ones are:
+  * Major bug fix to the subtyping machinery.  
+  * Bug fix in pattern matching error message.
+  * Fixed bug in using array types as the definition of a typedef.
+  * Various fixes to the documentation (thanks to Mujtaba Ali)
+
+* Register declarations without types are now supported.
+
+* Support for nested type declarations.  You no longer have to
+  declare a struct, datatype, or union before using it unless it
+  has parameters (though we do not get the scope right when it's
+  used within a function.)  
+
+* Better support for unique pointers.  
+
+* We can now parse __asm__ though it's only useful within 
+  extern "C include".  
+
+* We don't emit prototypes for all functions now (laziness in tovc.)
+
+* Lots of compiler hacking to cut heap allocation.
+
+* Got rid of some more warnings in the generated C code.
+
+* We now allow shadowed datatype constructors.  
+
+* bison doesn't do as many array bound checks.
+
+* You can use --geninterface to generate an interface foo.cyci
+  while compiling file foo.cyc.  We will later provide support 
+  for link-checking interfaces to ensure consistency across modules.
+
+* Better tree-shaking for unused declarations.
+
+* Preliminary support for absolute namespace declarations using
+  Cyc:: or C::.  For instance, given:
+
+  #include <core.h>
+  int Cyc::Core::x = 0;
+
+  declares x to be in namespace Core.  To use this, you need to
+  have previously declared the namespace somewhere.  
+
+----------------------------------------------------------------------
+Changes going from Version 0.3 dated 18 April 2002, to Version 0.4:
+
+* Bezillions of bug fixes.  Hopefully, we got yours, but if not,
+  please send us a bug report.
+
+* tests/shootout contains a copy of Doug Bagley's shootout code,
+  including (a) the original C version, (b) a straightforward
+  Cyclone port with minimal changes needed to get it to compile, 
+  and (c) an expert Cyclone port that takes advantage of advanced
+  Cyclone features.  See the README file.
+
+* Introduced "@tagged union" declarations.  These look and act
+  like C unions but include a hidden tag which is updated when
+  writing a member, and checked when reading a member.  If you
+  attempt to read a member other than the last one written, a
+  Match_Exception is thrown.  You can use tagcheck(e.m) as a
+  boolean expression to check whether or not m was the last 
+  member written in a tagged union (also tagcheck(e->m) for
+  pointers to tagged unions.)  
+  
+* Our old "tunion" and "xtunion" types have been renamed to
+  "datatype" and "@extensible datatype" respectively to avoid
+  confusion with @tagged unions.
+
+* e.size has changed to numelts(e).  
+
+* Because users found our pointer notation cryptic, we have 
+  introduced "long forms" for the various kinds of pointer
+  qualifiers:
+
+  @notnull/@nullable:  whether or not the pointer can be NULL
+  @zeroterm/@nozeroterm:  whether or not the sequence is zero-terminated
+  @thin/@fat: whether or not the pointer is fat
+  @numelts(e): upper bound on number of elements in sequence
+  @region(`r): region into which pointer refers
+
+  You can still use the old abbreviations if you prefer.  So,
+  for instance:
+
+  int *@notnull@numelts(42)@region(`r) == int @{42}`r
+
+* Introduced what we call "dynamic" regions.  Dynamic regions can
+  be deallocated at any time (as long as they're not open.)  However,
+  to access data in a dynamic region, or to allocate data in the
+  region, you have to open it up.  The open will fail if the region
+  has already been freed.  Dynamic regions are particularly useful
+  in conjunction with existential types, and are good for those
+  situations where you cannot statically determine the lifetimes
+  of objects.  
+
+* We now support writing down arbitrary union types.  However, if
+  they are untagged, then you can only read out the "bits-only"
+  members.  
+
+* You can use ",..." in tuple, struct, and datatype patterns to
+  match against any number of fields that you want to ignore.
+  For instance:
+
+  struct Foo {int a,b,c,d,e,f,g;};
+
+  int foo(struct Foo f) {
+    let Foo{.a = a, .g = g, ...} = f;
+    return a + g;
+  }
+
+* You can omit the struct or tagged union's name in a pattern,
+  as long as we can determine it from context.  So, the foo function
+  above can be rewritten as simply:
+
+  int foo(struct Foo f) {
+    let {.a = a, .g = g, ...} = f;
+    return a + g;
+  }
+
+* You can write "<id> as <pat>" as a pattern like ML.  This binds
+  the value being matched to the identifier, but continues matching
+  it to extract more values in <pat>.  
+
+* You no longer have to write kinds on bound type variables of
+  type definitions -- they are inferred from the definition.  
+  You *do* have to write kinds on type declarations or else the
+  kinds default to ::B (boxed).  So, for instance, if you write:
+
+    struct List<`a,`r>;
+
+  then this elaborates to: 
+  
+    struct List<`a::B,`r::B>;
+
+  To make `r have region kind (::R) you need to put it in explicitly:
+
+    struct List<`a,`r::R>;
+
+  However, if you give a definition for List, then you do not
+  need to declare the kind of `r as it can be inferred:
+
+    struct List<`a,`r> { `a hd; struct List<`a,`r>*`r tl; }
+
+* The syntax for declaring regions has changed slightly.  It used to be:
+
+    region r <stmt> 
+
+  Now it's more like a C declaration:
+
+    region r; <stmt>
+
+* There is now some support for dependent array sizes.  For a
+  good example, see tests/shootout/cyc-matrix.cyc which is a
+  version of matrix multiplication that takes in a matrix with
+  statically unknown dimensions.  The interface for the function
+  looks like this:
+
+  void mmult(tag_t rows,
+             tag_t cols,
+             int @{cols}@{rows} m1,
+             int @{cols}@{cols} m2,
+             int @{cols}@{rows} m3);
+
+  Note that the number of rows and columns of m1, m2, and m3
+  depend upon the tag_t values rows and cols.  Tag values are
+  unsigned, singleton integers.  The above is really shorthand
+  for:
+
+  void mmult(tag_t<`i::I> rows,
+             tag_t<`j::I> cols,
+             int @{valueof(`j)}@{valueof(`i)} m1,
+             int @{valueof(`j)}@{valueof(`j)} m2,
+             int @{valueof(`j)}@{valueof(`i)} m3);
+
+  Here we see that rows is some unsigned integer named `i at
+  the type-level, cols is some unsigned integer named `j,
+  and the number of rows and columns of m1,m2, and m3 depends
+  upon the value of `i and `j.  
+
+  The valueof(T) form takes a type-level (integer-kinded) expression
+  and allows you to embed the type into a value-level expression
+  which can be used to specify a bound on an array as in the example
+  above.  Furthermore, in the matrix multiply example code, the flow 
+  analysis is smart enough to avoid all run-time checks.  As a result,
+  the output of Cyclone is equivalent to the original C code.
+
+  Sadly, we have not yet updated the documentation to cover this
+  feature in detail.
+
+* You don't have to write a type-level region name in a prototype --
+  you can use the variable instead.  That is, you can abbreviate:
+
+    void foo(region_t<`r> r, int*`r)
+
+  with
+
+    void foo(region_t r, int*`r)
+
+* Patterns can now include (almost) arbitrary constant expressions.
+
+* There's a primitive porting tool.  If you take a C file (say foo.c)
+  copy it to foo.cyc and wrap the code that you want ported with:
+  __cyclone_port_on__; ... __cyclone_port_off__; and compile the
+  file with "cyclone -port", then the compiler will spit out a list
+  of edits.  These edits may be applied with the bin/rewrite tool
+  to produce foo_new.cyc.  The tool attempts to figure out where 
+  fat pointers are needed, what the region interface for a function
+  should be, and where to insert const so that things will type-check
+  under Cyclone's rules.  This won't succeed most of the time, but
+  it will generally get your code closer.  
+
+* Added extern "C include" declarations.  These allow you to define
+  C code inline in a Cyclone file.  For example:
+
+  extern "C include" { 
+    int peek(int i) {
+       return *((int *)i);
+    }
+  } export {
+    peek;
+  }
+
+  The code is (mostly) ignored by Cyclone and spit out for C to
+  compile.  The interface is processed by Cyclone, so you can use
+  Cyclone types in it (e.g., ?) but you can't use Cyclone features
+  within the definitions.  The export section identifies those 
+  identifiers you want to export to the Cyclone environment.  
+  A typical use is something like:
+
+  extern "C include" {
+  #include <c_code.h>
+  // wrappers to make c_code safe
+  } export {
+    // functions in c_code already safe and wrappers,
+    // but not unsafe functions.
+  }
+
+* There's some support for "unique pointers".  If you have a unique
+  pointer to an object, then you can free it at will.  However, 
+  you cannot make copies of unique pointers.  You can swap unique
+  pointer values within shared data structures.  And there is some
+  tentative support for writing code that is polymorphic over whether
+  or not a pointer is unique, but this has not yet been worked out
+  to our satisfaction. 
+
+* The compiler has been modified to use either (a) fine-grained
+  regions for all memory management, (b) coarse-grained regions,
+  or (c) the garbage collector.  Right now, the default is to use
+  coarse-grained regions.  This won't have any effect on users,
+  but if you've been staring at the Cyclone source code, you'll
+  now see a lot more uses of regions.
+
+----------------------------------------------------------------------
+Changes going from Version 0.2 dated 20 November 2001, to Version 0.3:
+
+* In order to provide better library coverage, we had to cut back
+  on the number of platforms that we support directly.  In particular,
+  we now only provide support for linux x86, cygwin, and Mac OS X.
+  Other architectures might or might not work.  To port to a new
+  architecture requires more work -- see the INSTALL file for details.
+
+* Introduction of the buildlib tool to simplify interface to C
+  and to provide a portable way to extract Cyclone header files
+  and wrappers for a C library.  This tool is used to build all
+  of the system-dependent libraries (e.g., stdio).  See the
+  documentation for details.
+
+* Worked around a bug in GCC that prevented us from building on
+  Mac OS X.  The problem involves nested statement expressions
+  ({S;e}) which we use heavily.  The temporary fix is to use
+  inlined functions for certaion operations instead of macro's
+  which expand to these.  Unfortunately, the macro's produced
+  much better code since GCC doesn't do certain optimizations
+  after inlining.  So, as a result, only certain files are 
+  compiled with the inlined functions (the ones that were causing
+  the problems.)
+
+* Data structures that are "bits-only" (i.e., consisting of ints,
+  chars, floats, etc. but not pointers or zero-terminated arrays)
+  need not be initialized.
+
+* Much more complete library coverage.  After installing, look
+  in lib/cyc-lib/<architecture>/include to see what is and isn't
+  there.  Read the buildlib documentation for details on how to
+  add new library functions.  
+
+* 0 can be used in place of NULL (except within patterns).
+
+* Added long double support.
+
+* Support for anonymous structions, unions, etc.  
+
+* Added sizeof_t<T> which is the type of sizeof(e) when e has type T.
+  Useful for specifying prototypes on things like memmove, memcpy,
+  memset, bzero, etc.
+
+* Added support for malloc/calloc for more than one object.  You can
+  use malloc for "bits-only" arrays, and calloc to allocate arrays
+  of any type that supports 0 as a value, including * and ? types.
+
+* Can cast bits only types to char? types.  
+
+* Added an option --lineno that emits line-number information in the
+  generated C code.  Helps when using gdb to debug Cyclone code but
+  doesn't work all that well yet and takes a long time to compile
+  and generates large files.
+
+* Added a Cyclonized version of flex.
+
+* Flags --nochecks, -nonullchecks, and --noboundschecks can be used
+  to turn off bounds checks.  
+
+* We eliminate an array bounds check on a subscript of the form x[i]
+  where x and i are local variables that do not escape, and the 
+  subscript is dominated by a test of the form i < x.size or
+  i < y and y <= x.size.  You can use assert to force checks to move
+  outside of loops too.  See the string library for examples.
+
+* Fewer warnings about dereferencing a possibly-NULL pointer when
+  you've already checked that it's not NULL.
+
+* You can leave the return type off of a function and it defaults
+  to int.  
+
+* We now only warn if you fail to return a "bits-only" type instead
+  of generating an error.
+
+* We support the "noreturn" attribute which is useful for giving
+  the control-flow analysis more accuracy.  
+
+* We warn when main() has a bad type.
+
+* Removed existential types from tunions and instead added them
+  to structs.  
+
+* Added support for abstract typedef's.  You can write:
+  typedef _ t;  and t is treated as an abstract type (of Box kind).
+
+* Added support for "resetable" dynamic regions.  (Need to update
+  the documentation to show how to use them.)  Here's an example:
+
+    region [resetable] r {
+       ... allocate data in r ...
+       reset_region(r); // frees all data in r and kills 
+                        // all variables that might point into r
+       ... allocate new data in r ...
+    }
+
+* Added support for initializing something through a procedure
+  call.  For instance, given the prototype:
+
+    void f(int @x) __attribute__((initializes(1)));
+
+  you can call f with a pointer to something that is not yet
+  initialized and conclude that after the call, it is initialized.
+
+* Added preliminary support for "tag types" which will allow you
+  to connect the size of an array to an integer value.  More
+  support forthcoming along with documentation.
+
+* Added preliminary support for type representations.  More
+  support forthcoming along with documentation.
+
+* Added support for outlives bounds for quantified regions.  See
+  the fn library for an example and the PLDI paper for details.
+
+* Added support for zero-terminated arrays and pointers.  For
+  instance, char *ZEROTERM is a pointer to a zero-terminated
+  sequence of characters (i.e., a C string).  You can do some
+  limited subscripting and pointer arithmetic on such pointers,
+  but it's expensive.  It's much better to convert the value
+  to a char ?ZEROTERM and then manipulate it.  This is likely
+  to be the most confusing a difficult change to deal with.
+  See the documentation for more examples and the limitations
+  of these pointers.  Finally, note that char pointers by
+  default are assumed to be ZEROTERM.  If you mean for them
+  to not be ZEROTERM, then you need to write NOZEROTERM 
+  explicitly (e.g., char ?NOZEROTERM).
+
+* More flexible parsing of GCC-style attributes.
+
+* Improved error reporting as best we could.
+
+* Use GCC-style locations when reporting an error (e.g., file:lineno)
+  instead of also including the character offset in the line.  You can
+  get the more detailed location information by using the
+  -detailedlocation flag.
+
+* Support all casts to void now.
+
+* Use -maarch=i686 when compiling on an x86 to avoid having GCC
+  using movsl to copy structs (i.e., ? types).  Much improved
+  performance.
+
+* The argv passed to Cyclone's main now includes a NULL temrinator.
+  Thus, argc = argv.size + 1.
+
+
+
+
+

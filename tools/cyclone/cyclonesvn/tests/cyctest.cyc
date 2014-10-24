@@ -1,0 +1,73 @@
+#include "cyctest.h"
+#include "support.h"
+
+/* The test suites */
+
+#include "try_suite.h"
+#include "core_suite.h"
+#include "list_suite.h"
+#include "array_suite.h"
+#include "tuple_suite.h"
+#include "pattern_match_suite.h"
+#include "set_suite.h"
+#include "dict_suite.h"
+#include "hash_suite.h"
+#include "string_suite.h"
+#include "buffer_suite.h"
+#include "queue_suite.h"
+#include "rope_suite.h"
+#include "ctype_suite.h"
+#include "xarray_suite.h"
+#include "bitvec_suite.h"
+#include "filename_suite.h"
+#include "float_suite.h"
+#include "fn_suite.h"
+#include "pp_suite.h"
+#include "arg_suite.h"
+#include "printf_suite.h"
+#include "scanf_suite.h"
+#include "extern_c_suite.h"
+#include "attribute_suite.h"
+#include "letv_suite.h"
+#include "signals_suite.h"
+#include "union_suite.h"
+#include "swap_suite.h"
+
+/* Running them */
+
+CT_MAIN_BEGIN(print_level)
+
+  CT_SUITE_REGISTER(Exception);
+  CT_SUITE_REGISTER(Core);
+  CT_SUITE_REGISTER(Array);
+  CT_SUITE_REGISTER(List);
+  CT_SUITE_REGISTER(Tuple);
+  CT_SUITE_REGISTER(Patterns);
+  CT_SUITE_REGISTER(Set);
+  CT_SUITE_REGISTER(Dict);
+  CT_SUITE_REGISTER(Hash);
+  CT_SUITE_REGISTER(String);
+  CT_SUITE_REGISTER(Buffer);
+  CT_SUITE_REGISTER(Queue);
+  CT_SUITE_REGISTER(Rope);
+  CT_SUITE_REGISTER(Ctype);
+  CT_SUITE_REGISTER(Xarray);
+  CT_SUITE_REGISTER(Bitvec);
+  CT_SUITE_REGISTER(Filename);
+  CT_SUITE_REGISTER(Float);
+  CT_SUITE_REGISTER(Fn);
+  CT_SUITE_REGISTER(PP);
+  CT_SUITE_REGISTER(Arg);
+  CT_SUITE_REGISTER(Printf);
+  CT_SUITE_REGISTER(Scanf);
+  CT_SUITE_REGISTER(ExternC);
+  CT_SUITE_REGISTER(Attributes);
+  CT_SUITE_REGISTER(Letv);
+  CT_SUITE_REGISTER(Signals);
+  CT_SUITE_REGISTER(TaggedUnions);
+  CT_SUITE_REGISTER(Swap);
+
+  if (print_level > 0)
+    printf("*************** CYCLONE TEST SUITE ***************\n\n");
+
+CT_MAIN_END(print_level)

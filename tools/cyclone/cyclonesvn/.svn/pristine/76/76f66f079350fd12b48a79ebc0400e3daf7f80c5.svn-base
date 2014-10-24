@@ -1,0 +1,107 @@
+#!/bin/bash
+# runs all of the benchmark tests, in various flavors.  Output is printed
+# to stdout, one line per executable, with the elapsed times for each
+# iteration on the line.
+#
+# usage: runtests [n [testname1] [testname2] ...]
+#   where n is the number of iterations per test.
+
+TEST=./test.sh
+TESTJAVA=./test-java.sh
+
+if [ -z "$LANGS" ]; then
+  LANGS="gcc cyclone cyclone-port java"
+fi
+if [ -z "$BENCHMARKS" ]; then
+  BENCHMARKS="ackermann ary3 except fibo hash hash2 heapsort lists nestedloop random reversefile sieve spellcheck strcat sumcol wc"
+# matrix (after lists)
+fi
+
+if [ $# -lt 1 ]; then
+N=1
+else
+N=$1
+shift
+if [ $# != 0 ]; then
+BENCHMARKS=$*
+fi
+fi
+
+function getargs {
+  case "$1" in
+    ackermann) echo 8;;
+    ary3) echo 7000;;
+    binarytrees) echo 10;;
+    echo) echo 100000;;
+    except) echo 200000;;
+    fibo) echo 32;;
+    hash) echo 80000;;
+    hash2) echo 150;;
+    heapsort) echo 80000;;
+    hello) echo 200;;
+    lists) echo 16;;
+    matrix) echo 300;;
+    moments) echo 150;;
+    nestedloop) echo 16;;
+    prodcons) echo 100000;;
+    random) echo 900000;;
+    regexmatch) echo 9000;;
+    reversefile) echo 20;;
+    sieve) echo 900;;
+    spellcheck) echo 10;;
+    strcat) echo 40000;;
+    sumcol) echo 1000;;
+    wc) echo 2000;;
+    wordfreq) echo 20;;
+    *) echo "failure"; exit 1;;
+#      ackermann) echo 10;;
+#      ary3) echo 50000;;
+#      fibo) echo 38;;
+#      hash) echo 120000;;
+#      hash2) echo 100;;
+#      heapsort) echo 900000;;
+#      hello) echo 200;;
+#      matrix) echo 280;;
+#      nestedloop) echo 16;;
+#      random) echo 900000;;
+#      reversefile) echo 20;;
+#      sieve) echo 900;;
+#      sumcol) echo 1000;;
+#      wc) echo 2000;;
+#      *) echo "failure"; exit 1;;
+  esac
+}
+
+function getinputfile {
+  case "$1" in
+    reversefile) echo data/reversefile-Input;;
+    spellcheck) echo data/spell-Input;;
+    sumcol) echo data/sumcol-Input;;
+    wc) echo data/wc-Input;;
+    moments) echo data/moments-Input;;
+    wordfreq) echo data/wordfreq-Input;;
+    regexmatch) echo data/regexmatch-Input;;
+    *) echo ;;
+  esac
+}  
+
+# Do the benchmarks
+
+for file in $BENCHMARKS
+do
+  ARGS=`getargs $file`
+  INPUTFILE=`getinputfile $file`
+  for lang in $LANGS
+  do
+    if [ "${lang}" = "java" ]; then
+      $TESTJAVA $N ${lang} ${file} $ARGS $INPUTFILE
+    else
+      $TEST $N ${lang}/${file} $ARGS $INPUTFILE
+    fi
+    if [ -f "nocheck-${lang}/${file}" ]; then
+      $TEST $N nocheck-${lang}/${file} $ARGS $INPUTFILE
+    fi
+#    $TEST $N ./nocheck-${file} $ARGS $INPUTFILE
+#    $TEST $N ./nobounds-${file} $ARGS $INPUTFILE
+  done
+done

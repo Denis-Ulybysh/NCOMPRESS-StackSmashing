@@ -1,0 +1,377 @@
+\section{Tagged Unions and Datatypes}
+\label{sec:taggedunions}
+
+In addition to \texttt{struct}, \texttt{enum}, and \texttt{union},
+Cyclone provides \texttt{@tagged union} and \texttt{datatype}
+declarations as ways to construct new aggregate types.  Like a
+\texttt{union} type, each \texttt{@tagged union} and \texttt{datatype}
+has a number of \textit{variants} (or members).  Unlike conventional
+\texttt{union}s, an object of a \texttt{@tagged union} or
+\texttt{datatype} type is exactly one variant, we can detect (or
+discriminate) that variant at run-time, and the language prevents
+using an object as though it had a different variant.
+
+The difference between \texttt{@tagged union}s and \texttt{datatype}s
+is that the former look and behave much like traditional unions, 
+whereas the latter look and behave more like the algebraic datatypes
+found in functional languages such as ML\@.  Furthermore, datatypes
+can be either closed or \texttt{@extensible}.  A closed datatype's
+members are specified all together when the datatype is declared, 
+whereas an \texttt{@extensible} datatype supports adding new members
+after the fact (much like adding a new sub-class to a class-based
+OO language.)  
+
+In this section, we first discuss \texttt{@tagged} unions,
+then closed datatypes, and finally \texttt{@extensible} datatypes.
+
+\subsection{Tagged Unions}
+
+A tagged union declaration looks just like a C union,
+except that it you must specify the \texttt{@tagged} qualifier
+when declaring it.  For example:
+\begin{verbatim}
+   @tagged union Foo {
+      int i;
+      double d;
+      char *@fat s;
+   };
+\end{verbatim}
+The primary difference with C unions is that a tagged union
+includes a hidden tag.  The tag indicates which member was
+last written.  So, for example:
+\begin{verbatim}
+  union Foo x;
+  x.i = 3;
+  x.s = "hello";
+\end{verbatim}
+causes the hidden tag to first indicate that the \texttt{i}
+member was written, and then is updated to record that the
+\texttt{s} member was written.  
+
+When you attempt to read a member of a tagged union, a
+check is done on the hidden tag to ensure that this was
+the last member written, and thus the union contains a
+valid object of that member's type.  If some other member
+was last updated, then a \texttt{Match_Exception} will
+be thrown.  
+
+You can test the hidden tag of a tagged union by using
+the \texttt{tagcheck} operation.  For example:
+\begin{verbatim}
+  void printFoo(union Foo x) {
+    if (tagcheck(x.i))
+      printf("%d",x.i);
+    else if (tagcheck(x.d))
+      printf("%g",x.d);
+    else if (tagcheck(x.s))
+      printf("%s",x.s);
+  }
+\end{verbatim}
+Alternatively, you can use pattern matching (described
+in the next section) which will ensure that you cover
+all of the cases properly.  For instance, the function
+above may be rewritten as:
+\begin{verbatim}
+  void printFoo(union Foo x) {
+    switch (x) {
+    case {.i = i}: printf("%d",i); break;
+    case {.d = d}: printf("%g",d); break;
+    case {.s = s}: printf("%s",s); break;
+    }
+  }
+\end{verbatim}
+If we failed to leave out one of the cases in the
+pattern match, then the compiler would warn us.  This
+is particularly helpful when you add new variants to
+a tagged union, for then the compiler pinpoints the
+spots that you need to update in your code.  Therefore,
+we encourage the use of pattern matching where possible.
+
+\subsection{Datatypes}\hypertarget{datatype_sec}{}
+
+At its simplest, a \texttt{datatype} looks just like an \texttt{enum} 
+declaration.  For example, we could say:
+\begin{verbatim}
+  datatype Color { Red, Green, Blue };
+\end{verbatim}
+
+As with \texttt{enum}, the declaration creates a type (called
+\texttt{datatype Color}) and three constants \texttt{Red}, \texttt{Green}, and
+\texttt{Blue}.  Unlike \texttt{enum}, these constants do not have type
+\texttt{datatype Color}.  Instead, each variant has its \textit{own type},
+namely \texttt{datatype Color.Red}, \texttt{datatype Color.Green}, and
+\texttt{datatype Color.Blue}.  However, a pointer to one of these values
+can be treated as a sub-type of a pointer to a 
+\texttt{datatype Color}.  So you can write:
+\begin{verbatim}
+  datatype Color.Red red = Red;
+  datatype Color *c = &red;
+\end{verbatim}
+In this simple example, we are splitting hairs, but we will soon find
+all these distinctions useful.
+
+Unlike \texttt{enum}, \texttt{datatype} variants may carry any fixed
+number of values, as in this example:
+\begin{verbatim}
+  datatype Shape {
+    Point,
+    Circle(float),
+    Ellipse(float,float),
+    Polygon(int,float),
+  };
+\end{verbatim}
+
+A \texttt{Point} has no accompanying information, a \texttt{Circle} has a
+radius, an \texttt{Ellipse} has two axis lengths, and a (regular)
+\texttt{Polygon} has a number of sides and a radius.  (The value fields
+do not have names, so it is often better style to have a variant carry
+one value of a struct type, which of course has named members.)  This
+example creates five types: \texttt{datatype Shape},
+\texttt{datatype Shape.Point}, \texttt{datatype Shape.Circle},
+\texttt{datatype Shape.Ellipse}, and \texttt{datatype Shape.Polygon}.  Like in
+our previous example, \texttt{datatype Shape.Point*} is a subtype of
+\texttt{datatype Shape*} and \texttt{Point} is a constant of
+type \texttt{datatype Shape.Point}.
+
+Variants that carry one or more values are treated differently.
+\texttt{Circle} becomes a \textit{constructor}; given a float it produces an
+object of type \texttt{datatype Shape.Circle}, for example \texttt{Circle(3.0)}.
+Similarly, \texttt{Ellipse(0,0)} has type \texttt{datatype Shape.Ellipse}
+(thanks to implicit casts from \texttt{int} to \texttt{float} for 0) and
+\texttt{Polygon(7,4.0)} has type \texttt{datatype Shape.Polygon}.  The
+arguments to a constructor can be arbitrary expressions of the correct
+type, for example, \texttt{Ellipse(rand(), sqrt(rand()))}.
+
+Here are some examples which allocate a \texttt{Point} and \texttt{Circle}
+respectively, but then use subtyping to treat the resulting values
+as if they are \texttt{Shape} pointers:
+\begin{verbatim}
+  datatype Shape *s1 = new Point;
+  datatype Shape *s2 = new Circle(3.0);
+\end{verbatim}
+
+Datatypes are particularly useful for building recursive structures.
+For example, a small language of arithmetic expressions might look
+like this:
+\begin{verbatim}
+  enum Unops { Negate, Invert};
+  enum Binops { Add, Subtract, Multiply, Divide };
+  typedef datatype Exp *@notnull exp_t;
+  datatype Exp {
+    Int(int),
+    Float(float),
+    Unop(enum Unops, exp_t),
+    Binop(enum Binops, exp_t, exp_t)
+  };
+\end{verbatim}
+
+A function returning an expression representing the multiplication of
+its parameter by two can be written like this:
+\begin{verbatim}
+  exp_t double_exp(datatype Exp @e) {
+    return new Binop(Multiply, e, new Int(2));
+  }
+\end{verbatim}
+
+\paragraph{Accessing Datatype Variants} Given a value of a \texttt{datatype}
+type, such as \texttt{datatype Shape}, we do not know which variant it is.
+It could be a \texttt{Circle} or \texttt{Shape}, etc.  In Cyclone, we
+use \emph{pattern matching} to determine which variant a given datatype
+value actually is, and to extract the arguments that were used to
+build the datatype value.  For example, here is how you could define
+\texttt{isCircle}:
+\begin{verbatim}
+  bool isCircle(datatype Shape *s) {
+    switch(s) {
+    case &Circle(r): return true;
+    default: return false;
+    }
+  }
+\end{verbatim}
+
+When a \texttt{switch} statement's argument is a pointer to a datatype,
+the cases describe variants.  One variant of \texttt{datatype Shape *} is a
+pointer to a \texttt{Circle}, which carries one value.  The
+corresponding pattern has \texttt{\&} for the pointer, \texttt{Circle} for
+the constructor name, and one identifier for each value carried by
+\texttt{Circle}.  The identifiers are binding occurrences (declarations,
+if you will), and the initial values are the values of the fields of
+the \texttt{Circle} at which \texttt{s} points.  The scope is the extent
+of the case clause.  
+
+Here is another example:
+
+\textit{[The reader is asked to indulge compiler-writers who have
+  forgotten basic geometry.]}
+\begin{verbatim}
+  extern area_of_ellipse(float,float);
+  extern area_of_poly(int,float);
+  float area(datatype Shape *s) {
+    float ans;
+    switch(s) {
+    case &Point:
+      ans = 0;
+      break;
+    case &Circle(r):
+      ans = 3.14*r*r;
+      break;
+    case &Ellipse(r1,r2):
+      ans = area_of_ellipse(r1,r2);
+      break;
+    case &Polygon(sides,r):
+      ans = area_of_poly(sides,r);
+      break;
+    }
+    return ans;
+  }
+\end{verbatim}
+
+The cases are compared in order against \texttt{s}.  The following are
+compile-time errors:
+\begin{itemize}
+\item It is possible that a member of the \texttt{datatype} type matches
+  none of the cases.  Note that \texttt{default} matches everything.
+\item A case is useless because it could only match if one of the
+  earlier cases match.  For example, a default case at the end of the
+  \texttt{switch} in area would be an error.
+\end{itemize}
+
+As you can discover in \sectionref{sec:patterns}, Cyclone has much
+richer pattern-matching support than we have used here.
+
+\paragraph{Polymorphism and Datatypes} A \texttt{datatype} declaration may be
+polymorphic over types and regions just like a \texttt{struct}
+or \texttt{union} definition (see the section on
+\hyperlink{polymorphism}{polymorphism}).  For example, here is a
+declaration for binary trees where the leaves can hold some
+\texttt{BoxKind} \texttt{`a}:
+\begin{verbatim}
+  datatype Tree<`a>  {
+    Leaf(`a);
+    Node(datatype Tree<`a>*, datatype Tree<`a>*);
+  };
+\end{verbatim}
+
+In the above example, the root may be in any region, but all children
+will be in the heap.  The following version allows the children to be in any
+region, but they must all be in the same region.  (The root can still
+be in a different region.)
+
+\begin{verbatim}
+  datatype Tree<`a,`r>  {
+    Leaf(`a);
+    Node(datatype Tree<`a,`r> *`r, 
+         datatype Tree<`a,`r> *`r);
+  };
+\end{verbatim}
+
+\subsection{The Tagof Operator}\hypertarget{tagof_sec}{}
+
+Each datatype constructor has an associated unique integer called the
+\emph{tag}.  The tag of a datatype or datatype field can be accessed
+using the \texttt{tagof} operator.  For example, given the 
+datatype \texttt{Exp} defined previously, we can write a 
+structural comparison function which enforces an order on
+expressions as follows:
+
+\begin{verbatim}
+  bool sameexp(datatype Exp @e1, datatype Exp @e2) {
+    switch $(e1,e2) {
+    case $(&Int(i),&Int(j)): return i - j;
+    case $(&Float(f),&Float(g)): 
+        if (f == g) return 0;
+        if (f < g) return -1;
+        return 1;
+    case $(&Unop(u1,ea),&Unop(u2,eb)): 
+        int c = u1 - u2;
+        if (c != 0) return c;
+        return sameexp(ea,eb);
+    case $(&Binop(b1,ea1,ea2),&Binop(b2,eb1,eb2)):
+        int c = b1 - b2;
+        if (c != 0) return c;
+        c = sameexp(ea1,eb1);
+        if (c != 0) return c;
+        return sameexp(ea2,eb2);
+    default: return tagof(e1) - tagof(e2);
+    }
+  }
+\end{verbatim}
+
+This function compares the structure of two expressions 
+\texttt{e1} and \texttt{e2}
+and returns a number less than zero if $\texttt{e1} < \texttt{e2}$,
+zero if $\texttt{e1} == \texttt{e2}$, and a number greater than zero
+otherwise.  Notice that the default case needs to handle all of
+the situtations where \texttt{e1} and \texttt{e2} are different
+constructors.  To achieve this, we extract the tags from the
+two datatype values and return their difference.  This keeps us
+from having to write a more tedious match that would include
+the following cases:
+
+\begin{verbatim}
+   case $(&Int(_),_): return -1;
+   case $(_,&Int(_)): return 1;
+   case $(&Unop(_,_),_): return -1;
+   case $(_,&Unop(_)) return 1;
+\end{verbatim}
+
+\paragraph{Future}
+\begin{itemize}
+\item Currently, given a value of a variant type (e.g.,
+  \texttt{datatype Shape.Circle}), the only way to access the fields is
+  with pattern-matching even though the variant is known.  We may
+  provide a tuple-like syntax in the future.
+\item We hope to provide symbolic definitions for the values corresponding
+  to the tags of a datatype.  For now, the current association is that
+  the tags are assigned consecutively based on the order of the 
+  constructor declarations.  
+\end{itemize}
+
+\subsection{Extensible Datatypes}\hypertarget{xdatatype_sec}{}
+
+We now explain how an \texttt{@extensible datatype} type differs 
+from a \texttt{datatype}.
+The main difference is that later declarations may continue to
+add variants.  Extensible datatypes are useful for allowing clients to
+extend data structures in unforeseen ways.  For example:
+\begin{verbatim}
+  @extensible datatype Food;
+  datatype Food { Banana; Grape; 
+                  Pizza(list_t<datatype Food*>) };
+  datatype Food { Candy; Broccoli };
+\end{verbatim}
+
+After these declarations, \texttt{Pizza(new List(new Broccoli, NULL))} is a
+well-typed expression.
+
+If multiple declarations include the same variants, the variants must
+have the same declaration (the number of values, types for the values,
+and the same existential type variables).
+
+Because different files may add different variants and Cyclone
+compiles files separately, no code can know (for sure) all the
+variants of an \texttt{@extensible datatype}. 
+Hence all pattern-matches against a
+value of an \texttt{@extensible datatype} 
+type must end with a case that matches
+everything, typically \texttt{default}.
+
+There is one built-in \texttt{@extensible datatype} type: 
+\texttt{@extensible datatype exn} is the
+type of exceptions.  Therefore, you declare new \texttt{exn}
+constructors like this:
+
+\begin{verbatim}
+  datatype exn {BadFilename(string)};
+\end{verbatim}
+
+The implementation of \texttt{@extensible datatype} 
+types is very similar to that of
+\texttt{datatype} types, but variant tags cannot be represented as
+small integers because of separate compilation.  Instead, these
+tags are represented as pointers to unique locations in static
+data. 
+
+% Local Variables:
+% TeX-master: "main-screen"
+% End:

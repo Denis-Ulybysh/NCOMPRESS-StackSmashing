@@ -1,0 +1,963 @@
+\section{Libraries}
+\label{sec:libraries}
+
+\ifscreen
+\definecolor{cycdochighlight}{rgb}{.75,.81,1}
+\else
+\definecolor{cycdochighlight}{rgb}{1,1,1}
+\fi
+
+\subsection{C Libraries}
+Cyclone provides partial support for the following C library headers,
+at least on Linux.  On other platforms (e.g., Cygwin), some of these
+headers are not available.  Furthermore, not all definitions from
+these headers are available, but rather, those that we could easily
+make safe.
+
+\begin{tabular}{lll}\ttfamily
+\texttt{<aio.h>} &
+\texttt{<arpa/inet.h>} &
+\texttt{<assert.h>} \\
+\texttt{<complex.h>} &
+\texttt{<cpio.h>} &
+\texttt{<ctype.h>} \\
+\texttt{<dirent.h>} &
+\texttt{<dlfcn.h>} &
+\texttt{<errno.h>} \\
+\texttt{<fcntl.h>} &
+\texttt{<fenv.h>} &
+\texttt{<float.h>} \\
+\texttt{<fmtmsg.h>} &
+\texttt{<fnmatch.h>} &
+\texttt{<ftw.h>} \\
+\texttt{<getopt.h>} &
+\texttt{<glob.h>} &
+\texttt{<grp.h>} \\
+\texttt{<inttypes.h>} &
+\texttt{<iso646.h>} &
+\texttt{<langinfo.h>} \\
+\texttt{<libgen.h>} &
+\texttt{<limits.h>} &
+\texttt{<locale.h>} \\
+\texttt{<math.h>} &
+\texttt{<monetary.h>} &
+\texttt{<mqueue.h>} \\
+\texttt{<ndbm.h>} &
+\texttt{<net/if.h>} &
+\texttt{<netdb.h>} \\
+\texttt{<netinet/in.h>} &
+\texttt{<netinet/tcp.h>} &
+\texttt{<nl_types.h>} \\
+\texttt{<poll.h>} &
+\texttt{<pthread.h>} &
+\texttt{<pwd.h>} \\
+\texttt{<regexp.h>} &
+\texttt{<sched.h>} &
+\texttt{<search.h>} \\
+\texttt{<semaphore.h>} &
+\texttt{<setjmp.h>} &
+\texttt{<signal.h>} \\
+\texttt{<spawn.h>} &
+\texttt{<stdarg.h>} &
+\texttt{<stdbool.h>} \\
+\texttt{<stddef.h>} &
+\texttt{<stdint.h>} &
+\texttt{<stdio.h>} \\
+\texttt{<stdlib.h>} &
+\texttt{<string.h>} &
+\texttt{<strings.h>} \\
+\texttt{<stropts.h>} &
+\texttt{<sys/dir.h>} &
+\texttt{<sys/file.h>} \\
+\texttt{<sys/ioctl.h>} &
+\texttt{<sys/ipc.h>} &
+\texttt{<sys/mman.h>} \\
+\texttt{<sys/msg.h>} &
+\texttt{<sys/resource.h>} &
+\texttt{<sys/select.h>} \\
+\texttt{<sys/sem.h>} &
+\texttt{<sys/shm.h>} &
+\texttt{<sys/socket.h>} \\
+\texttt{<sys/stat.h>} &
+\texttt{<sys/statvfs.h>} &
+\texttt{<sys/syslog.h>} \\
+\texttt{<sys/time.h>} &
+\texttt{<sys/timeb.h>} &
+\texttt{<sys/times.h>} \\
+\texttt{<sys/types.h>} &
+\texttt{<sys/uio.h>} &
+\texttt{<sys/un.h>} \\
+\texttt{<sys/utsname.h>} &
+\texttt{<sys/wait.h>} &
+\texttt{<tar.h>} \\
+\texttt{<termios.h>} &
+\texttt{<tgmath.h>} &
+\texttt{<time.h>} \\
+\texttt{<trace.h>} &
+\texttt{<ucontext.h>} &
+\texttt{<ulimit.h>} \\
+\texttt{<unistd.h>} &
+\texttt{<utime.h>} &
+\texttt{<utmpx.h>} \\
+\texttt{<wchar.h>} &
+\texttt{<wctype.h>} &
+\texttt{<wordexp.h>}
+\end{tabular}
+
+
+
+
+\input{gen-libdoc}
+
+%HEVEA \newcommand{\parbox}[3][x]{#3}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\var}[1]{\texttt{#1}}
+\newcommand{\vvar}[1]{{\tt\textbf{\textit{#1}}}}
+%HEVEA \begin{latexonly}
+\ifscreen
+\newcommand{\defunlabel}[1]{%
+  \parbox[b]{\labelwidth}{\makebox[0pt][l]{\colorbox{lightblue}{#1}}}}
+\else
+\newcommand{\defunlabel}[1]{%
+  \parbox[b]{\labelwidth}{\makebox[0pt][l]{#1}}}
+\fi
+\newenvironment{defun}[2]{%
+  \begin{list}{}{}%
+    \renewcommand{\makelabel}{\defunlabel}%
+    \index{#1@\texttt{#1}}%
+  \item[{\tt\textbf{#1}#2}]\mbox{}\\}{\end{list}}
+\newenvironment{defun2}[3]{%
+  \begin{list}{}{}%
+    \renewcommand{\makelabel}{\defunlabel}%
+    \index{#2@\texttt{#2()}}%
+  \item[{\tt {#1}~\textbf{#2}{#3}}]\mbox{}\\}{\end{list}}
+\newenvironment{deexn}[2]{%
+  \begin{list}{}{}%
+    \renewcommand{\makelabel}{\defunlabel}%
+    \index{#1@\texttt{#1}}%
+  \item[{\tt datatype exn~\lb~extern~\textbf{#1}{#2}~\rb;}]\mbox{}\\}{\end{list}}
+%HEVEA \end{latexonly}
+%HEVEA \newcommand{\defunlabel}[1]{%
+%HEVEA   \parbox[b]{\labelwidth}{%
+%HEVEA \begin{rawhtml}<table><tr><td bgcolor="c0d0ff">\end{rawhtml}%
+%HEVEA #1%
+%HEVEA \begin{rawhtml}</td></tr></table>\end{rawhtml}%
+%HEVEA }}
+%HEVEA\newenvironment{defun}[2]{%
+%HEVEA  \begin{list}{}{}%
+%HEVEA    \renewcommand{\makelabel}{\defunlabel}%
+%HEVEA    \index{#1@\texttt{#1}}%
+%HEVEA  \item[{\tt\textbf{#1}#2}]}{\end{list}}
+%HEVEA\newenvironment{defun2}[3]{%
+%HEVEA  \begin{list}{}{}%
+%HEVEA    \renewcommand{\makelabel}{\defunlabel}%
+%HEVEA    \index{#2@\texttt{#2()}}%
+%HEVEA  \item[{\tt {#1}~\textbf{#2}{#3}}]}{\end{list}}
+%HEVEA\newenvironment{deexn}[2]{%
+%HEVEA  \begin{list}{}{}%
+%HEVEA    \renewcommand{\makelabel}{\defunlabel}%
+%HEVEA    \index{#1@\texttt{#1}}%
+%HEVEA  \item[{\tt datatype exn~\lb~extern~\textbf{#1}{#2}~\rb;}]}{\end{list}}
+
+\newcommand{\tindex}[1]{}
+\newcommand{\exindex}[1]{}
+
+% \subsection{Bitvec}
+
+% Namespace \code{Bitvec} implements bit vectors, which can be used to
+% represent sets with a fixed number of elements.
+
+% \subsubsection*{Header}
+% \begin{verbatim}
+% #include <bitvec.h>
+% using Bitvec;
+% \end{verbatim}
+
+% \subsubsection*{Types}
+% \begin{verbatim}
+% typedef int BITVEC[?];
+% \end{verbatim}
+
+% \subsubsection*{Creating bit vectors}
+
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% BITVEC new_empty(int);
+% BITVEC new_full(int);
+% BITVEC new_copy(BITVEC);
+% BITVEC from_list<`a,`b>(Dict::Dict<`a,`b> d, int f(`b),int sz, List::list<`a>);
+% List::list<int> to_sorted_list(BITVEC bvec, int sz);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{new_empty}{(n)}
+% Returns a bit vector containing \var{n} bits, all set to 0.
+% \end{defun}
+
+% \begin{defun}{new_full}{(n)}
+% Returns a bit vector containing \var{n} bits, all set to 1.
+% \end{defun}
+
+% \begin{defun}{new_copy}{(v)}
+% Returns a copy of bit vector \var{v}.
+% \end{defun}
+
+% \subsubsection*{Accessing and updating bits}
+
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% bool get(BITVEC, int);
+% void set(BITVEC, int);
+% void clear(BITVEC, int);
+% bool get_and_set(BITVEC, int);
+% void clear_all(BITVEC);
+% void set_all(BITVEC);
+% bool all_set(BITVEC bvec, int sz);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{get}{(v,n)}
+% Returns the \var{n}th bit of vector \var{v}.
+% \end{defun}
+
+% \begin{defun}{set}{(v,n)}
+% Sets the \var{n}th bit of vector \var{v} to 1.
+% \end{defun}
+
+% \begin{defun}{clear}{(v,n)}
+% Sets the \var{n}th bit of vector \var{v} to 0.
+% \end{defun}
+
+% \begin{defun}{get_and_set}{(v,n)}
+% Sets the \var{n}th bit of vector \var{v} to 1, and returns the value
+% that the \var{n}th bit had before it was set to 1.
+% \end{defun}
+
+% \begin{defun}{set_all}{(v)}
+% Sets every bit of \var{v} to 1.
+% \end{defun}
+
+% \begin{defun}{clear_all}{(v)}
+% Sets every bit of \var{v} to 0.
+% \end{defun}
+
+% \begin{defun}{all_set}{(v,n)}
+% Does ?????  FIX
+% \end{defun}
+
+% \subsubsection*{Combining and comparing bit vectors}
+
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% void union_two(BITVEC dest, BITVEC src1, BITVEC src2);
+% void intersect_two(BITVEC dest, BITVEC src1, BITVEC src2);
+% void diff_two(BITVEC dest, BITVEC src1, BITVEC src2);
+% bool compare_two(BITVEC src1, BITVEC src2);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{union_two}{(dest,src1,src2)}
+% Updates \var{dest} with the bitwise-or of \var{src1} and \var{src2}.
+% There is no error if \var{dest} is shorter than \var{src1} or
+% \var{src2} (extra bits are ignored).  If \var{src1} or \var{src2}
+% is shorter than \var{dest}, \code{Null_Exception} is thrown;
+% \var{dest} may be partially updated.
+% \end{defun}
+
+% \begin{defun}{intersect_two}{(dest,src1,src2)}
+% Updates \var{dest} with the bitwise-and of \var{src1} and \var{src2}.
+% Its error conditions are the same as \code{union_two}.
+% \end{defun}
+
+% \begin{defun}{diff_two}{(dest,src1,src2)}
+% Updates \var{dest} with the bitwise-difference of \var{src1} and
+% \var{src2}.  Its error conditions are the same as \code{union_two}.
+% \end{defun}
+
+% \begin{defun}{compare_two}{(src1,src2)}
+% Returns 1 if every bit of
+% \var{src1} is the same as the corresponding bit of \var{src2}, and 0
+% otherwise.  If \var{src2} is longer than \var{src1}, its extra bits are
+% ignored.  If \var{src2} is shorter than \var{src1},
+% \code{Null_Exception} is thrown.
+% \end{defun}
+
+% \subsubsection*{Printing bit vectors}
+
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% void print_bvec(BITVEC bvec);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{print_bvec}{(v)}
+% FIX: PUT SOMETHING HERE
+% \end{defun}
+
+% \subsection{Ctype}
+
+% Namespace \code{Ctype} implements the character library of C\@.
+
+% \subsubsection*{Header}
+% \begin{verbatim}
+% #include <ctype.h>
+% using Ctype;
+% \end{verbatim}
+
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% int isalnum(int c);
+% int isalpha(int c);
+% int iscntrl(int c);
+% int isdigit(int c);
+% int isgraph(int c);
+% int islower(int c);
+% int isprint(int c);
+% int ispunct(int c);
+% int isspace(int c);
+% int isupper(int c);
+% int isxdigit(int c);
+% int tolower(int c);
+% int toupper(int c);
+% int isascii(int c);
+% int toascii(int c);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{isalnum}{(c)}
+% Returns 1 if \code{isalpha(c)} or \code{isnum(c)} returns 1,
+% and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isalpha}{(c)}
+% Returns 1 if \code{islower(c)} or \code{isupper(c)} returns 1,
+% and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{iscntrl}{(c)}
+% Returns 1 if \var{c} is a control character,
+% and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isdigit}{(c)}
+% Returns 1 if \var{c} is a decimal digit (\code{'0'}--\code{'9'}), and
+% returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isgraph}{(c)}
+% Returns 1 if \var{c} is a non-space printing character, and returns 0
+% otherwise.
+% \end{defun}
+
+% \begin{defun}{islower}{(c)}
+% Returns 1 if \var{c} is a lowercase letter (\code{'a'}--\code{'z'}),
+% and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isprint}{(c)}
+% Returns 1 if \var{c} is a printing character (including space), and
+% returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{ispunct}{(c)}
+% Returns 1 if \var{c} is a non-whitespace, non-digit, non-alpha
+% printing character, and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isspace}{(c)}
+% Returns 1 if \var{c} is a whitespace character (\code{' '},
+% \verb|'\f'|, \verb|'\n'|, \verb|'\r'|, \verb|'\t'|, or \verb|'\v'|),
+% and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isupper}{(\var{c})}
+% Returns 1 if \var{c} is an uppercase letter
+% (\code{'A'}--\code{'Z'}), and returns 0 otherwise.
+% \end{defun}
+
+% \begin{defun}{isxdigit}{(c)}
+% Returns 1 if \var{c} is a hexidecimal digit (\code{'0'}--\code{'9'} or
+% \code{'A'}--\code{'F'} or \code{'a'}--\code{'f'}), and returns 0
+% otherwise.
+% \end{defun}
+
+% \begin{defun}{tolower}{(c)}
+% If \var{c} is an uppercase letter (\code{'A'}--\code{'Z'}), then
+% \code{tolower(\var{c})} returns its lowercase (\code{'a'}--\code{'z'})
+% equivalent; otherwise it returns \var{c}.
+% \end{defun}
+
+% \begin{defun}{toupper}{(c)}
+% If \var{c} is a lowercase letter (\code{'a'}--\code{'z'}), then
+% \code{toupper(\var{c})} returns its uppercase
+% (\code{'A'}--\code{'Z'}) equivalent; otherwise it returns \var{c}.
+% \end{defun}
+
+% \subsection{Stdio}
+
+% \begin{verbatim}
+% #include <stdio.h>
+% using Stdio;
+% \end{verbatim}
+
+% The namespace \texttt{Stdio} provides input and output primitives.
+
+
+% \subsubsection*{Formatted output}
+
+% Cyclone provides safe versions of \code{printf} and \code{fprintf} as
+% built-in primitives.  It also provides a built-in function,
+% \code{aprintf}, that allocates a string, prints to it, and returns it.
+% If the format string argument of these functions is given as a string
+% constant, the types of the remaining arguments are checked at compile
+% time; if the format string is not given as a string constant, the
+% types of the remaining arguments are checked at run time, using
+% Cyclone's safe vararg feature.  This prevents format string attacks in
+% Cyclone.
+
+% The permissible types for the varargs of \texttt{printf},
+% \texttt{fprintf}, and \texttt{aprintf} are given by the type
+% \texttt{parg_t}; if you need to know the details of \texttt{parg_t},
+% consult \texttt{stdio.h}.
+
+% \begin{defun2}{int}{fprintf}{(FILE @\var{f},const char {?}`r \var{fmt}, ...`r1 inject parg_t<`r2>);}
+%   Prints to the stream pointed to by \var{f} according to the format
+%   string \var{fmt} and the remaining arguments.  It returns the number
+%   of characters printed, or a negative value if an output error or
+%   encoding error occurred.
+% \end{defun2}
+% \begin{defun2}{int}{printf}{(const char {?}`r \var{fmt}, ...`r1 inject parg_t<`r2>);}
+%   Prints to the standard output according to the format string \var{fmt}
+%   and the remaining arguments.  It returns the number of characters
+%   printed, or a negative value if an output error or encoding error
+%   occurred.
+% \end{defun2}
+% \begin{defun2}{int}{sprintf}{(char {?}`r1 \var{s}, const char {?}`r2 \var{fmt}, ...`r3 inject parg_t<`r4>);}
+%   Writes into string \var{s} according to format string \var{fmt} and
+%   the remaining arguments.  It returns the number of characters
+%   printed, or a negative value if an output error or encoding error
+%   occurred.
+% \end{defun2}
+% \begin{defun2}{char ?}{aprintf}{(const char {?}`r2 \var{fmt}, ...`r3 inject parg_t<`r4>);}
+%   Allocates and returns a string whose contents are given by printing
+%   according to the format string \var{fmt} and the remaining arguments.
+%   \texttt{FIX: is an error possible?  What do we do then?}
+% \end{defun2}
+% \begin{defun2}{char {?}`r1}{raprintf}{(region_t<`r1>, const char {?}`r2 fmt, ...`r3 inject parg_t<`r4> ap);}
+%   Allocates and returns a string whose contents are given by printing
+%   according to the format string \var{fmt} and the remaining arguments.
+%   The string is allocated in region \code{`r1}.
+% \end{defun2}
+
+% \begin{defun2}{int}{vfprintf}{(FILE @,const char {?}`r fmt, parg_t<`r2> ? `r1 ap);}
+%   A version of \code{fprintf} suitable for calling from a user's
+%   vararg function.
+% \end{defun2}
+% \begin{defun2}{int}{vprintf}{(const char {?}`r fmt, parg_t<`r2> ? `r1);}
+%   A version of \code{printf} suitable for calling from a user's
+%   vararg function.
+% \end{defun2}
+% \begin{defun2}{int}{vsprintf}{(char {?}`r1 s, const char {?}`r2 fmt, parg_t<`r4> ? `r3);}
+%   A version of \code{sprintf} suitable for calling from a user's
+%   vararg function.
+% \end{defun2}
+% \begin{defun2}{char {?}`r1}{vraprintf}{(region_t<`r1> r1, const char {?}`r2 fmt, parg_t<`r4> ? `r3 ap);}
+%   A version of \code{raprintf} suitable for calling from a user's
+%   vararg function.
+% \end{defun2}
+
+% \subsubsection*{Output format strings}
+
+% The format string consists of ordinary (non-\code{\%}) characters, which
+% are copied to the output, and \emph{conversion specifications}, which
+% are sequences of characters introduced by \code{\%}.  Each conversion
+% specification `converts' zero or more arguments to the output, as
+% described below.
+
+% A conversion specification has the following parts, described, in order,
+% by regular expressions:
+% \begin{itemize}
+% \item Zero or more \emph{flags}:
+% [\code{-} \code{+} \emph{space} \code{\#} \code{0}]*
+% \item An optional minimal \emph{width}:
+% (\code{*} | [\code{0}-\code{9}]+)?
+% \item An optional \emph{precision}:
+% (\code{.} (\code{*} | [\code{0}-\code{9}]+)? )?
+% \item An optional \emph{length modifier}:
+% (\code{l} | \code{h} | \code{hh} )
+% \item A \emph{conversion specifier}:
+% [\code{d} \code{i} \code{o} \code{u} \code{x} \code{X} \code{f} \code{F} \code{e} \code{E} \code{g} \code{G} \code{a} \code{A} \code{c} \code{s} \code{n} \code{\%}]
+% \end{itemize}
+
+% The flag \code{-} causes left justification; right justification is the
+% default.  The flag \code{+} is valid for numeric conversions only; it
+% forces a \code{+} sign to be printed for positive arguments.  The flag
+% \emph{space} (the space character) is valid for numeric conversions only;
+% it causes an extra space to be printed in front of positive arguments.
+% It is ignored if the \code{+} flag is also given.
+% The flag \code{\#} is valid for \code{o}, \code{x}, \code{X}, \code{a},
+% \code{A}, \code{e}, \code{E}, \code{f}, \code{F}, \code{g}, \code{G}
+% only; it causes an ``alternative form'' to be printed.  For \code{o} it
+% forces a leading zero to be printed; for \code{x} and \code{X}, a
+% leading \code{0x} or \code{0X} is added to non-zero conversions; for the
+% other conversions, a decimal point is always printed.
+
+% The width of a conversion specification gives a minimum width for the
+% result of the conversion; if the conversion naturally gives a shorter
+% result, it is padded by spaces to the minimum width.  If the width has
+% the form \code{*}, the minimum width is given by an integer argument.
+
+% A precision is valid for numeric conversions only.  It gives the minimum
+% number of digits to appear for the \code{d}, \code{i}, \code{o},
+% \code{u}, \code{x}, and \code{X} conversions, the number of digits to
+% appear after the decimal point in the \code{a}, \code{A}, \code{e},
+% \code{E}, \code{f}, and \code{F} conversions, and the maximum number of
+% significant digits for the \code{g} and \code{G} conversions.  If the
+% precision has the form \code{.} \code{*}, it is given by an integer
+% argument.
+
+% The optional length modifier and conversion specifier give the type of
+% the corresponding argument, as shown in the table below.  If no type
+% appears, then the combination of conversion specifier and length
+% modifier is not allowed.
+
+% \begin{tt}
+% \begin{tabular}{r|llll}
+%   & none         & l             & h              & hh\\\hline
+% d & int          & long          & short          & char \\
+% i & int          & long          & short          & char \\
+% o & unsigned int & unsigned long & unsigned short & unsigned char \\
+% u & unsigned int & unsigned long & unsigned short & unsigned char \\
+% x & unsigned int & unsigned long & unsigned short & unsigned char \\
+% X & unsigned int & unsigned long & unsigned short & unsigned char \\
+% f & double \\
+% F & double \\
+% e & double \\
+% E & double \\
+% g & double \\
+% G & double \\
+% a & double \\
+% A & double \\
+% c & int \\
+% s & string \\
+% n & int @        & unsigned long @ & short @      & char @ \\
+% \% & \textrm{(no arg)}
+% \end{tabular}
+% \end{tt}
+
+% No flags, width, precision, or length modifiers are allowed for the
+% \code{s} and \code{\%} conversions.
+
+% The \code{d} and \code{i} specifiers print their arguments as signed
+% decimal integers.
+
+% The \code{o} specifier prints its argument as an unsigned octal number.
+
+% The \code{u} specifier prints its argument as an unsigned decimal number.
+
+% The \code{x} and \code{X} specifiers print their arguments as unsigned
+% hexidecimal integers.
+
+% The \code{f} and \code{F} specifiers print their arguments in the form
+% [-]ddd.ddd (no exponents).
+
+% The \code{e} and \code{E} specifiers print their arguments using exponents.
+
+% The \code{g} and \code{G} specifiers print their arguments using either
+% the \code{f}/\code{F}
+% style or the \code{e}/\code{E} style, depending on the precision and the
+% argument.
+
+% The \code{a} and \code{A} specifiers print their arguments as
+% hexidecimal floating point numbers.
+
+% The \code{c} specifier prints its argument as an unsigned character.
+
+% The \code{s} specifier prints its argument as a zero terminated string.
+
+% The \code{n} specifier does not print its argument; instead, the number
+% of characters written up to the \code{n} specifier is stored where the
+% argument points.
+
+% The \code{\%} specifier prints a \code{\%} character.
+
+
+% \subsubsection*{Formatted input}
+
+% Cyclone provides safe versions of \code{scanf}, \code{fscanf}, and
+% \code{sscanf}.  If the format string argument of these functions is
+% given as a string constant, the types of the remaining arguments are
+% checked at compile time; if the format string is not given as a string
+% constant, the types of the remaining arguments are checked at run
+% time, using Cyclone's safe vararg feature.
+
+% The permissible types for the varargs of the input functions are given
+% by the type \texttt{sarg_t}; if you need to know the details of
+% \texttt{sarg_t}, consult \texttt{stdio.h}.
+
+% \begin{defun2}{int}{scanf}{(const char {?}`r1 \var{fmt}, ...`r2 inject sarg_t<`r3,`r4>);}
+%   Reads from the standard input according to the format string
+%   \var{fmt}.  Results are stored in the remaining arguments.
+%   \code{scanf} returns the number of arguments successfully read.  If
+%   an error occurs before any arguments are converted, \code{EOF} is
+%   returned.
+% \end{defun2}
+% \begin{defun2}{int}{fscanf}{(FILE @ \var{stream}, const char {?}`r1 \var{fmt}, ...`r2 inject sarg_t<`r3,`r4>);}
+%   Reads from the \var{stream} according to the format string
+%   \var{fmt}.  Results are stored in the remaining arguments.
+%   \code{fscanf} returns the number of arguments successfully read.  If
+%   an error occurs before any arguments are converted, \code{EOF} is
+%   returned.
+% \end{defun2}
+% \begin{defun2}{int}{sscanf}{(const char {?}`r \var{src}, const char {?}`r1 \var{fmt}, ...`r2 inject sarg_t<`r3,`r4>);}
+%   Reads from the string \var{src} according to the format string
+%   \var{fmt}.  Results are stored in the remaining arguments.
+%   \code{sscanf} returns the number of arguments successfully read.  If
+%   an error occurs before any arguments are converted, \code{EOF} is
+%   returned.
+% \end{defun2}
+% \begin{defun2}{int}{vfscanf}{(FILE @ stream, const char {?}`r1 \var{fmt}, sarg_t<`r3,`r4> {?}`r2);}
+%   A version of \code{fscanf} suitable for calling from a user's
+%   vararg function.
+% \end{defun2}
+% \begin{defun2}{int}{vsscanf}{(const char {?}`r \var{src}, const char {?}`r1 \var{fmt}, sarg_t<`r3,`r4> {?}`r2);}
+%   A version of \code{sscanf} suitable for calling from a user's
+%   vararg function.
+% \end{defun2}
+
+% \subsubsection*{Input format strings}
+
+% The format string consists of white space characters (which match any
+% (possible empty) sequence of white space characters), ordinary
+% (non-\code{\%}) characters (which match themselves), and \emph{conversion
+% specifications}, which are sequences of characters introduced by
+% \code{\%}.  Each conversion specification `converts' a sequence of
+% characters from the input stream, placing the result into storage
+% pointed to by the corresponding argument of \code{scanf} or
+% \code{fscanf}.
+
+% A conversion specification has the following parts, described, in order,
+% by regular expressions:
+% \begin{itemize}
+% \item An optional assignment suppression character, \code{*}
+% \item An optional maximal \emph{width}:
+% ([\code{0}-\code{9}]+)?
+% \item An optional \emph{length modifier}:
+% (\code{l} | \code{h} | \code{hh} )
+% \item A \emph{conversion specifier}:
+% [\code{d} \code{i} \code{o} \code{u} \code{x} \code{X} \code{f} \code{F} \code{e} \code{E} \code{g} \code{G} \code{a} \code{A} \code{n} \code{\%}]
+% \end{itemize}
+
+% If the assignment suppression character \code{*} is given, the
+% characters corresponding to the conversion specifier are read, but no
+% argument is assigned, and no argument is required for that specifier.
+
+% The optional length modifier and conversion specifier give the type of
+% the corresponding argument, as shown in the table below.  If no type
+% appears, then the combination of conversion specifier and length
+% modifier is not allowed.
+
+% \begin{tt}
+% \begin{tabular}{r|llll}
+%   & none           & l               & h                &  hh\\\hline
+% d & int @          & long @          & short @          & char @ \\
+% i & int @          & long @          & short @          & char @ \\
+% o & unsigned int @ & unsigned long @ & unsigned short @ & unsigned char @ \\
+% u & unsigned int @ & unsigned long @ & unsigned short @ & unsigned char @ \\
+% x & unsigned int @ & unsigned long @ & unsigned short @ & unsigned char @ \\
+% X & unsigned int @ & unsigned long @ & unsigned short @ & unsigned char @ \\
+% f & float @        & double @ \\
+% F & float @        & double @ \\
+% e & float @        & double @ \\
+% E & float @        & double @ \\
+% g & float @        & double @ \\
+% G & float @        & double @ \\
+% a & float @        & double @ \\
+% A & float @        & double @ \\
+% n & int @          & unsigned long @ & short @          & char @ \\
+% \% & \texttt{(no arg)}
+% \end{tabular}
+% \end{tt}
+
+% The \code{d} and \code{i} specifiers match optionally signed decimal
+% integers.
+
+% The \code{o} specifier matches an optionally signed octal integer.
+
+% The \code{u} specifier matches an optionally signed decimal integer.
+
+% The \code{x} and \code{X} specifiers match optionally signed hexidecimal
+% integers.
+
+% The \code{f}, \code{F}, \code{e}, \code{E}, \code{g}, \code{G},
+% \code{a}, and \code{A} specifiers match floating point numbers.
+
+% The \code{n} specifier does not match any input; instead, the number of
+% characters read by the call of \code{fscanf} or \code{scanf} up to the
+% \code{n} specifier is stored where the argument points.
+
+% The \code{\%} specifier matches a \code{\%} character.  No assignment
+% suppression, width, or length modifiers are allowed for the \code{\%}
+% conversion.
+
+% \subsection{String}
+
+% \begin{verbatim}
+%     #include <string.h>
+%     using String;
+% \end{verbatim}
+
+% Namespace \code{String} implements a string library similar to the one
+% provided by C\@.  In Cyclone, a string is a \code{char ?}.  Because
+% strings are so pervasive, several common typedefs for strings are
+% defined in namespace \texttt{Core}:
+% \begin{alltt}
+%     typedef const char ?\textbf{string_t};
+%     typedef char ?\textbf{mstring_t};
+%     typedef string_t @\textbf{stringptr_t};
+%     typedef mstring_t @\textbf{mstringptr_t};
+% \end{alltt}
+% A \texttt{string_t} is an immutable string, while an
+% \texttt{mstring_t} is a mutable string.  The pointer variants of these
+% are useful to instantiate strings in polymorphic data types.  We use
+% ``string'' to refer to any and all of these, depending on context.
+
+% Most functions in \texttt{String} consider a zero (NUL) character as
+% an end of string marker, so we may have \texttt{strlen(s)} <
+% \texttt{s.size} for a string \var{s}.  Functions that do not follow
+% this convention have names starting with 'z'.  Many functions accept a
+% string and an offset; these functions may have names ending in 'o'.
+% Functions whose arguments have range errors throw the
+% \code{Core::InvalidArg} exception.
+
+% \subsubsection*{String length}
+% \begin{defun2}{size_t}{strlen}{(const char {?}`r \vvar{s});}
+%   Returns the length of the string \vvar{s}.  It considers a NUL
+%   character to mark the end of the string.
+% \end{defun2}
+
+% \subsubsection*{Comparing strings}
+% The string comparison functions return an integer less than, equal to,
+% or greater than 0 if their first argument is less than, equal to, or
+% greater than their second argument, respectively.  The ordering used
+% is the standard, lexicographic ordering.
+
+% \begin{defun2}{int}{strcmp}{(const char {?}`r1 \vvar{s1}, const char {?}`r2 \vvar{s2});}
+%   Compares \var{s1} to \var{s2}.
+% \end{defun2}
+
+% \begin{defun2}{int}{strptrcmp}{(const char {?}`r1@`r2 \vvar{s1}, const char {?}`r3@`r4 \vvar{s2});}
+%   A string pointer version of \code{strcmp}.
+% \end{defun2}
+
+% \begin{defun2}{int}{strncmp}{(const char {?}`r1 \vvar{s1}, const char {?}`r2 \vvar{s2}, size_t \vvar{len});}
+%   Compares at most \vvar{len} characters of \vvar{s1} to \vvar{s2}.  If
+%   \vvar{len} is negative, \code{strncmp} returns 0.
+% \end{defun2}
+
+% \begin{defun2}{int}{strncasecmp}{(const char {?}`r1 \vvar{s1}, const char {?}`r2 \vvar{s2}, size_t \vvar{len});}
+%   A case-insensitive version of \code{strncmp}.
+% \end{defun2}
+
+% \begin{defun2}{int}{zstrcmp}{(const char {?}`r1 \vvar{s1},const char {?}`r2 \vvar{s2});}
+%   Compares \vvar{s1} to \vvar{s2}, and it assumes that NUL (zero)
+%   characters in \vvar{s1} and \vvar{s2} are not end-of-string markers.
+% \end{defun2}
+
+% \begin{defun2}{int}{zstrptrcmp}{(const char {?}`r1@`r2 \vvar{s1}, const char {?}`r3@`r4 \vvar{s2});}
+%   A string pointer version of \code{zstrcmp}.
+% \end{defun2}
+
+% \begin{defun2}{int}{zstrncmp}{(const char {?}`r1 \vvar{s1},const char {?}`r2 \vvar{s2}, size_t \vvar{n});}
+%   Compares at most \vvar{n} characters of \vvar{s1} to \vvar{s2},
+%   assuming that NUL characters do not mark the end of strings.  If
+%   \vvar{n} is less than 0, \code{zstrncmp} returns 0.
+% \end{defun2}
+
+% \subsubsection*{Concatenating strings}
+
+% \begin{verbatim}
+% \end{verbatim}
+
+% \begin{defun2}{char {?}`r1}{strcat}{(char {?}`r1 \vvar{dest},const char {?}`r2 \vvar{src});}
+%   Concatenates \vvar{src} onto \vvar{dest} and returns \vvar{dest}.
+%   If \vvar{dest} is not large enough, \code{strcat} throws
+%   \code{Core::InvalidArg("String::strcat")}.
+% \end{defun2}
+
+% \begin{defun2}{char ?}{strconcat}{(const char {?}`r1 \vvar{s1},const char {?}`r2 \vvar{s2});}
+%   Heap allocates and returns a new string whose contents are the
+%   concatenation of \vvar{s1} and \vvar{s2}.
+% \end{defun2}
+
+% \begin{defun2}{char {?}`r}{rstrconcat(region_t<`r> \vvar{r},const char {?}`r1 \vvar{dest},const char {?}`r2 \vvar{src});}
+%   A version of \code{strconcat} that allocates the resulting string in
+%   the region given by \vvar{r}.
+% \end{defun2}
+
+% \begin{defun2}{char ?}{strconcat_l}{(glist_t<const char {?}`r1@`r2,`r> \vvar{l});}
+%   Allocates and returns a new string whose contents are the
+%   concatenation of the strings in the list \vvar{l}, from left to
+%   right.
+% \end{defun2}
+
+% \begin{defun2}{char {?}`r}{rstrconcat_l}{(region_t<`r> \vvar{r},glist_t<const char {?}`r1@`r2,`r3> \vvar{l});}
+%   A version of \code{strconcat_l} that allocates the resulting string
+%   in the region given by \vvar{r}.
+% \end{defun2}
+
+% \begin{defun2}{char ?}{str_sepstr}{(glist_t<const char {?}`r1@`r2,`r> \vvar{l},const char {?}`r3 \vvar{s});}
+%   Allocates and returns a new string whose contents are the
+%   concatenation of the strings in the list \vvar{l}, with \vvar{s} used
+%   as a separator between each two adjacent elements in \vvar{l}.
+% \end{defun2}
+
+% \begin{defun2}{char {?}`r}{rstr_sepstr}{(\begin{tabular}[t]{@{}l@{}}
+%       region_t<`r> \vvar{r},\\
+%       glist_t<const char {?}`r1@`r2,`r3> \vvar{l},\\
+%       const char {?}`r4 \vvar{s});\end{tabular}}
+%   A version of \code{str_sepstr} that allocates the resulting string
+%   in the region given by \vvar{r}.
+% \end{defun2}
+
+% \subsubsection*{Copying strings and substrings}
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% string strcpy(string dest,string src);
+% string strncpy(string,string,size_t);
+% string zstrncpy(string,string,size_t);
+% string expand(string s, size_t sz);
+% string realloc_str(string str, size_t sz);
+% string strdup(string src);
+% string substring(string,int ofs, size_t n);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{strcpy}{(dest,src)}
+% Copies \var{src} into \var{dest} and returns \var{dest}.  If \var{dest}
+% is not big enough to hold \var{src}, \code{strcpy} throws
+% \code{Core::InvalidArg("String::strncpy")}.
+% \end{defun}
+
+% \begin{defun}{strncpy}{(dest,src,len)}
+% Copies at most \var{len} characters of \var{src} into \var{dest} and
+% returns \var{dest}.  If \var{dest} is not big enough to hold
+% \var{src}, \code{strcpy} throws
+% \code{Core::InvalidArg("String::strncpy")}.
+% \end{defun}
+
+% \begin{defun}{zstrncpy}{(dest,src,len)}
+% A variant of \code{strncpy} that does not consider NUL characters to
+% terminate strings.
+% \end{defun}
+
+% \begin{defun}{expand}{(s,n)}
+% Allocates and returns a new string that has size \var{n} or
+% \code{strlen(\var{s})}, whichever is greater.  The returned string has
+% the same contents as \var{s} (considering NUL characters as string
+% terminators).
+% \end{defun}
+
+% \begin{defun}{realloc_str}{(s,n)}
+% Like expand except that the returned string is usually a bit bigger than
+% \var{n} and \code{strlen(\var{s})}.
+% \end{defun}
+
+% \begin{defun}{strdup}{(s)}
+% Allocates and returns a new string with the same contents as \var{s}
+% (assuming that NUL characters terminate strings).
+% \end{defun}
+
+% \begin{defun}{substring}{(s,ofs,len)}
+% Allocates and returns a new string whose contents are \var{len}
+% characters of \var{s} starting at offset \var{ofs}.  If \var{ofs} or
+% \var{len} are out of bounds then substrings throws
+% \code{Core::InvalidArg("String::substring")}.
+% \end{defun}
+
+% \subsubsection*{Transforming strings}
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% string replace_suffix(string,string,string);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{replace_suffix}{(s,before,after)}
+% Allocates and returns a string whose characters are the characters of
+% \var{s}, with its suffix before replaced by the string after.  If before
+% is not a suffix of \var{s}, then \code{replace_suffix} throws
+% \code{Core::InvalidArg("String::replace_suffix")}.
+% \end{defun}
+
+% \subsubsection*{Searching in strings}
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% int strchr(string s, int ofs, char c);
+% int strrchr(string s, int ofs, char c);
+% int strpbrk(string s, int ofs, string accept);
+% int strspn(string s, int ofs, string accept);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{strchr}{(s,ofs,c)}
+% Returns the lowest index \code{\var{i} >= \var{ofs}} such that
+% \code{\var{s}[\var{i}] == \var{c}}.  If \var{ofs} is out of range strchr
+% throws \code{Core::InvalidArg("String::strchr")}.  If \var{c} does not
+% appear in \var{s} starting at \var{ofs}, \code{strchr} returns -1.
+% \end{defun}
+
+% \begin{defun}{strrchr}{(s,ofs,c)}
+% Returns the greatest index \code{\var{i} >= \var{ofs}} such that
+% \code{\var{s}[\var{i}] == \var{c}}.  If \var{ofs} is out of range,
+% \code{strrchr} throws \code{Core::InvalidArg("String::strrchr")}.  If
+% \var{c} does not appear in \var{s} starting at \var{ofs}, \code{strrchr}
+% returns -1.
+% \end{defun}
+
+% \begin{defun}{strpbrk}{(s,ofs,accept)}
+% Returns the lowest index \code{\var{i} >= \var{ofs}} such that
+% \code{\var{s}[\var{i}] == \var{c}}, where \var{c} is any character of
+% accept.  If \var{ofs} is out of range, strpbrk throws
+% \code{Core::InvalidArg("String::strpbrk")}.  If no character of accept
+% appears in \var{s} starting at \var{ofs}, \code{strpbrk} returns -1.
+% \end{defun}
+
+% \begin{defun}{strspn}{(s,ofs,accept)}
+% Returns the lowest index \code{\var{i} >= \var{ofs}} such that
+% \code{\var{s}[\var{i}] == \var{c}}, where \var{c} is any character not
+% in the string \var{accept}.  If \var{ofs} is out of range, \code{strspn}
+% throws \code{Core::InvalidArg("String::strpbrk")}.  If no character of
+% \var{accept} appears in \var{s} starting at \var{ofs}, \code{strspn}
+% returns the length of \var{s} after \var{ofs}.
+% \end{defun}
+
+
+% \subsubsection*{String conversions}
+% \subsubsection*{Functions}
+% \begin{verbatim}
+% list<Char> explode(string s);
+% string implode(list<Char> c);
+% \end{verbatim}
+
+% \subsubsection*{Use}
+
+% \begin{defun}{explode}{(s)}
+% Returns a list of the characters in string \var{s}.
+% \end{defun}
+
+% \begin{defun}{implode}{(l)}
+% Allocates and returns a string whose contents are the characters in list
+% \var{l}, from left to right.
+% \end{defun}
+
+% Local Variables:
+% TeX-master: "main-screen"
+% End:

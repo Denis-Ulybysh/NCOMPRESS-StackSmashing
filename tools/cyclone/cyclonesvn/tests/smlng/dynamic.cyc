@@ -1,0 +1,236 @@
+
+#include "core.h"
+#include "list.h"
+#include "dynamic.h"
+#include "smlng.h"
+#include "timer.h"
+#include "stdio.h"
+using List;
+
+#define MAX_COST 0x7FFF // see below!!!
+#define VAL_WIDTH 11
+
+// slower to use smaller types because of local vars of wrong size I think.
+// anyway (see size_table).  Parallel arrays would induce more bounds checks.
+// The last option is to pack our own int.
+typedef unsigned int cost_t; 
+typedef unsigned int pos_t;  
+typedef unsigned int val_t;  
+
+// should probably pass in the context size / color, but I don't know it
+// the way I currently have things structured.
+
+// and we'll definitely need to check the clock and throw an exception
+// if necessary -- so make sure we're called with the whole doc in a 
+// consistent state!
+
+// for simplicity, we flatten the whole thing and then compute 
+// INPUT_SIZE at a time.
+
+//  typedef unsigned int entry_t; 
+//  #define MAKE_ENTRY(c,p) (((c) << 16) | (p))
+//  #define COST_OF_ENTRY(e) ((e) >> 16)
+//  #define POS_OF_ENTRY(e)  ((e) & 0xFF)
+typedef $(cost_t,pos_t) entry_t;
+#define MAKE_ENTRY(c,p) ($((c),(p)))
+#define COST_OF_ENTRY(e) ((e)[0])
+#define POS_OF_ENTRY(e)  ((e)[1])
+static entry_t size_table[MAX_WINDOW_SIZE*MAX_WINDOW_SIZE*VAL_WIDTH];
+
+#define S(i,j,s) (size_table[(i)*MAX_WINDOW_SIZE*VAL_WIDTH + (j)*VAL_WIDTH + (s)])
+//$(int,int) size_table[INPUT_SIZE][INPUT_SIZE][NUM_SIZES];
+//#define S(i,j,s) size_table[i][j][s]
+
+// curr_pos must be an int -- this is for the entire sequence
+static void flatten_vals(doc_t doc, $(doc_t,val_t) ?@`r doc_arr, 
+			 int @`r curr_pos, val_t curr_val,
+			 val_t lowest_val, bool @{VAL_WIDTH}`r vals_occur) {
+  switch(doc) {
+  case Mt: return;
+  case &Spc(_): fallthru;
+  case &Text(_):       
+    if(*curr_pos == (*doc_arr).size)
+      *doc_arr = new {for i < (*doc_arr).size*2: 
+		      i < (*doc_arr).size ? (*doc_arr)[i] : $(Mt,0)};
+    vals_occur[curr_val] = true;
+    (*doc_arr)[(*curr_pos)++] = $(doc,curr_val);
+    return;
+  case &Tagged(tag,d): 
+    flatten_vals(d,doc_arr,curr_pos,tag-lowest_val,lowest_val,vals_occur);
+    return;
+  case &Seq(ds): 
+    for(; ds != NULL; ds = ds->tl)
+      flatten_vals(ds->hd,doc_arr,curr_pos,curr_val,lowest_val,vals_occur);
+    return;
+  }
+}
+
+// TO DO: Decide where the size/recomoputation trade-offs are
+
+static doc_t unflatten_vals($(doc_t,val_t) ? doc_arr, pos_t left, pos_t right, 
+			    val_t outer_val, val_t lowest_val, val_t num_vals,
+			    bool @{VAL_WIDTH}`r vals_occur){
+  //  fprintf(stderr,"^%d %d ^", left,right);
+  if(left == right) {
+    // fprintf(stderr,"\n|%d %d %d %d|", outer_val,left,right,doc_arr[left][1]);
+    doc_t ans = doc_arr[left][0];
+    if(doc_arr[left][1] == outer_val)
+      return ans;
+    else
+      return new Tagged(doc_arr[left][1] + lowest_val, ans);
+  }
+  pos_t  split_point = POS_OF_ENTRY(S(left,right,outer_val));
+  val_t  left_val    = num_vals-1;
+  cost_t left_cost = MAX_COST;
+  for(val_t s=0; s < num_vals-1; ++s) {
+    if(!vals_occur[s])
+      continue;
+    cost_t this_cost = COST_OF_ENTRY(S(left,split_point,s));
+    if(this_cost != MAX_COST && s != outer_val)
+      ++this_cost;
+    if(this_cost < left_cost) {
+      left_cost = this_cost;
+      left_val  = s;
+    }
+  }
+  val_t  right_val  = num_vals-1;
+  cost_t right_cost = MAX_COST;
+  for(int s=0; s < num_vals-1; ++s) {
+    if(!vals_occur[s])
+      continue;
+    cost_t this_cost = COST_OF_ENTRY(S(split_point+1,right,s));
+    if(this_cost != MAX_COST && s != outer_val)
+      ++this_cost;
+    if(this_cost < right_cost) {
+      right_cost = this_cost;
+      right_val  = s;
+    }
+  }
+  //  fprintf(stderr,"\n|%d %d %d %d %d %d|", 
+  //  outer_val, left_val, right_val, left, split_point, right);
+  doc_t left_doc  = unflatten_vals(doc_arr,left,split_point,left_val,
+				   lowest_val,num_vals,vals_occur);
+  doc_t right_doc = unflatten_vals(doc_arr,split_point+1,right,right_val,
+				   lowest_val,num_vals,vals_occur);
+  if(left_val == right_val && left_val != outer_val)
+    return new Tagged(left_val + lowest_val, 
+		      new Seq(new List(left_doc, new List(right_doc, NULL))));
+  if(left_val != outer_val)
+    left_doc = new Tagged(left_val + lowest_val, left_doc);
+  if(right_val != outer_val)
+    right_doc = new Tagged(right_val + lowest_val ,right_doc);
+  return new Seq(new List(left_doc, new List(right_doc, NULL)));
+}
+
+// FIX: do something quick when we're out of time
+static inline doc_t dynamic_doit(doc_t doc, val_t lowest_val, val_t num_vals,
+				 bool shift, int window_size) {
+  if(window_size > MAX_WINDOW_SIZE) {
+    fprintf(stderr, "window size got too big!!!!");
+    return doc;
+  }
+  $(doc_t,val_t) ? doc_arr = new {for i < 20 : $(Mt,0)}; // resizes
+  bool vals_occur[VAL_WIDTH] = {for i < VAL_WIDTH : false};
+  int curr_pos = 0;
+  flatten_vals(doc, &doc_arr, &curr_pos, num_vals-1, lowest_val, vals_occur);
+  int arr_size = curr_pos;
+  list_t<doc_t> ans = NULL;
+  bool after_initcolor = shift;
+  curr_pos = 0;
+  while(curr_pos < arr_size) {
+    //    fprintf(stderr,"!%d %d!",curr_pos,arr_size);
+    //    fprintf(stderr, "X %d ", check_time());
+
+    // skip any initial-value
+    while(curr_pos < arr_size && doc_arr[curr_pos][1] == num_vals - 1) {
+      after_initcolor = true;
+      ans = new List(doc_arr[curr_pos][0], ans);
+      ++curr_pos;
+    }
+
+    if(curr_pos == arr_size)
+      break;
+
+    // get an initial-value-free chunk, no larger than window_size
+    int input_size = 1;
+    // for first one and after init color, shift the window
+    int limit = window_size;
+    if(after_initcolor && shift) {
+      after_initcolor = false;
+      limit /= 2;
+    }
+    while(curr_pos+input_size < arr_size 
+	  && doc_arr[curr_pos+input_size][1] != num_vals - 1
+	  && input_size < limit)
+      ++input_size;
+
+    if(input_size == limit)
+      longer_seq = true;
+
+    // need to check time in here!!!
+    for (pos_t i = 0; i < input_size; i++)
+      for (val_t s = 0; s < num_vals-1; s++) {
+	if(!vals_occur[s])
+	  continue;
+	val_t this_val = doc_arr[curr_pos+i][1];
+	cost_t this_cost;
+	if(this_val != s)
+	  this_cost = 1;
+	else
+	  this_cost = 0;
+	S(i,i,s) = MAKE_ENTRY(this_cost,0);
+      }
+    for (pos_t d = 1; d < input_size; d++)
+      for (val_t s = 0; s < num_vals-1; s++)
+	for (pos_t i = 0; i+d < input_size; i++) {
+	  pos_t  j = i+d;
+	  cost_t min_cost = MAX_COST;
+	  pos_t  min_ind  = num_vals-1;
+	  for (pos_t k = i; k < j; k++)
+	    for (val_t s1 = 0; s1 < num_vals-1; s1++) {
+	      if(!vals_occur[s1])
+		continue;
+	      for (val_t s2 = 0; s2 < num_vals-1; s2++) {
+		if(!vals_occur[s2])
+		  continue;
+		cost_t left  = COST_OF_ENTRY(S(i,  k,s1));
+		cost_t right = COST_OF_ENTRY(S(k+1,j,s2));
+		cost_t m_new;
+		m_new = left + ((s1==s)?0:1) + right + ((s2==s)?0:1);
+		if (m_new < min_cost) {
+		  min_cost = m_new;
+		  min_ind   = k;
+		}
+	      }
+	    }
+	  //  fprintf(stderr,"\n#(%d,%d,%d,%d) = %d#", i,j,s,min_ind,min_cost);
+	  S(i,j,s) = MAKE_ENTRY(min_cost,min_ind);
+	}
+    // copied from unflatten_size -- should share
+    val_t  left_val  = num_vals-1;
+    cost_t left_cost = MAX_COST;
+    for(val_t s=0; s < num_vals-1; ++s) {
+      if(!vals_occur[s])
+	continue;	
+      cost_t this_cost = COST_OF_ENTRY(S(0,input_size-1,s));
+      if(this_cost < left_cost) {
+	left_cost = this_cost;
+	left_val  = s;
+      }
+    }
+    doc_t next = unflatten_vals(doc_arr+curr_pos, 0, input_size-1, left_val,
+				lowest_val, num_vals, vals_occur);
+    curr_pos += input_size;
+    next = new Tagged(left_val + lowest_val, next);
+    ans  = new List(next, ans);
+  }
+  return new Seq(imp_rev(ans));
+}
+doc_t dynamic_size(doc_t doc, bool shift, int window_size) {
+  return dynamic_doit(doc, Zero, Nine-Zero+2, shift, window_size);
+}
+
+doc_t dynamic_color(doc_t doc, bool shift, int window_size) {
+  return dynamic_doit(doc, r_tag, w_tag-r_tag+2, shift, window_size);
+}
+

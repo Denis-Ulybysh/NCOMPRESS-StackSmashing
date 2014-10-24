@@ -1,0 +1,282 @@
+Todo list:
+
+CONFIGURATION BUGS:
+------------------
+* someone suggests that make check should be added, following gnu
+  conventions
+
+BUG FIXES and UNSOUNDNESSES:
+----------------------------
+* We allow a thin pointer to an abstract struct to be coerced to
+  a fat pointer, even though we can't generate good C code for this.
+
+  struct Abstract;
+  void foo(`a::A ?);
+  void bar(struct Abstract @x) {
+    foo(x);
+  }
+
+  The problem is that to do the coercion, we need the sizeof the
+  abstract struct.
+
+  Right now, I'm abusing this bug in toc.cyc with the reference
+  counted dynamic region in toc_state.  If we fix this bug, then
+  we should probably 
+   (a) add a function:  
+         sizeof_t<struct DynamicRegion<`r::TR>> sizeof_dynregion();
+   (b) use Core::mkfat to do the coercion.
+
+* Bug in nested tagged unions:  f.y.z = 3  where both y and z are
+  tagged members.
+
+* Get rid of any left-over C warnings.
+
+* Test failures of type-checker, so that we always recover and exit properly.
+
+* Variables do not shadow typedef's properly.  For instance:
+
+  typedef int foo;
+
+  int f(foo foo) {
+    return foo;
+  }
+
+  fails to compile because the "return foo" is lexed not as an
+  identifier, but a typedef name.  We need to modify the parser and
+  lexer so that, upon entry of a scope, we shadow any typedefs
+  appropriately.
+
+* We need to modify the compiler to support local definitions for
+  types and extern identifiers.  
+
+* long int and int are treated as if they are the same when they are
+  not.  When we make this distinction, we should probably introduce a
+  new type, int_psize which is guaranteed to have the size and alignment
+  constraints of a pointer.  We should also change the Sizeof datatype to
+  use symbolic sizes instead of B1, B2, etc.  Finally, int_psize should
+  have BoxKind and, depending upon the architecture, int and long
+  *could* have BoxKind or MemKind.  We ought to have a flag on the
+  compiler that lets one treat them both as MemKind so that one can
+  easily write 64 bit code.
+
+* We need to support attribute mode.  This is used in GCC to specify
+  data representations, e.g., 64 bit integers.  Currently we are deleting
+  these when we build the standard library, see buildlib.cyl, so we
+  aren't getting the correct data representations!!!
+
+* There are too many conflicts in the parser (18 shift-reduce, 4 reduce-
+  reduce.)  Someone should really clean this up.
+
+* There are at least two problems with the new treatment of [r]malloc and
+  [r]calloc.  First, we need to check that the things we are allocating
+  aren't too large (just as we do with array comprehensions.)  This avoids
+  the situation where you do something like malloc(~1).  Second, I'm not
+  sure that I got the changes to Dan's control-flow analysis right.  I've
+  run into at least one situation where something panic'd but I can't
+  reproduce it right now.  
+
+* not inserting defaults for types in xdatatype variant types?
+
+* long long and short constants (12s, 3l, etc.)
+
+* attributes on enums? (e.g., packed)
+
+* we allow enum constructors to shadow other enum constructors even though
+  C doesn't.  
+
+* make command line arguments more like gcc: what happens
+  when no files are given?  what happens when we have the wrong extension?
+  (need flags to say how to treat it, ie. as cyc file, as .o file, as .c
+  file, etc.)
+
+* name mangling needs to be dealt with
+
+* FIX all of the FIX things.
+
+* add F-bounded polymorphism or at least make it possible to abstract
+  qualifiers.  The string library isn't polymorphic enough because in
+  many places, we want to pass in a mutable string and get out the
+  same string, but we're forced to cast up to a const char ? which
+  then loses the mutability in the result.
+
+* because of where clauses, we need to have a default pattern everywhere
+  (well, you could rule out some of them when things are const.)  Even without
+  where clauses, when we add threads, we will need to add default cases
+  because a thread can change some mutable value that we're looking at
+  during the pattern match.  
+  Alternatively, we could do like O'Caml and copy the values out
+  before doing any tests.
+
+* We rely on C to catch incomplete types, such as 
+  struct X {
+    struct X x;
+  };
+
+* We should properly support nested extern declarations within functions.
+  For instance:
+
+  void f() {
+   extern void g();
+   g();
+  }
+
+* Should break out initializers and lvalues so that the syntax is
+  respected properly (e.g., shouldn't be casting lvalues).  
+
+* Should change code generator so it doesn't rely upon GCC extensions.
+  Ideally, we should be able to emit ANSI-C code.
+
+* Implementation of polymorphism assumes sizeof(void *) == sizeof(int).
+  Implementations of exceptions and backtrace() assume sizeof(void *)
+  == sizeof(int) Also we don't follow C's rules about variables live
+  across longjmp being declared volatile and setjmp only appearing in
+  guards.
+
+* link-checking:  we need to spit out an internal interface for each
+  module and check for consistency at link-time.  Note that we should
+  also check that main has the right type.  We should have the compiler
+  hash and sign the code and interface so that we can detect tampering
+  with the code or interface at link-time.
+
+* we need to do a bounds check on enum assignments.  Also, the pattern
+  matcher assumes that there are no duplicate tags for enums.
+
+* namespace issues:  we treat `namespace Foo {extern "C" int x;}' as if
+  x is translated as Cyc_Foo_x but it's translated as "x".  We should
+  really define both "x" and "Cyc_Foo_x" in the environment.  In addition,
+  users can spoof a Cyclone variable by writing {extern "C" int Cyc_x;}.
+
+* src/Makefile produces $(OUTPUT_PREFIX)parse_tab.h, but parse.h is
+  hardcoded to #include "parse_tab.h", so everything breaks when you
+  use a prefix.
+
+* cyclone -Dfoo=bar baz.c
+  does not pass the macro definition to the .c file; macro definitions
+  are only passed to .cyc files.
+
+* we don't allow casts in "constant" expressions so as to avoid
+  the issue that our casts may include computation.  We should
+  have a way to check to see if a cast doesn't do any computation.
+
+MISSING THINGS NEEDED TO PORT REAL CODE:
+----------------------------------------
+* SUPPORTING RE-ENTRANCY (so code works in the kernel):
+
+  - operations on fat pointers need to be atomic.
+  - operations on the heap region handle must be atomic
+    (there is no way for reentrant code to access other region handles, so
+    the heap handle could be treated specially; we could also generalize).
+  - the region/exception stack must be made "thread-local" (different
+    mechanisms are appropriate in different domains, i.e. POSIX threads
+    vs. user-level threads vs. the kernel).
+  - there is the issue with where clauses mentioned above
+
+* SUPPORTING CONCURRENCY/THREADS:
+
+  - do all of the stuff for re-entrancy, above.
+  - add synchronization primitives directly; i.e. locks.  Chances are we
+    have to do this for re-entrancy anyway.
+  - add the remaining thread primitives; i.e. port some/all of the POSIX
+    threads interface.
+
+* We should augment the abstract syntax and the parser so that we can
+  read any GCC code, including things like asm.  This will make extern
+  "C include" more useful.
+
+* argv should really have the type char* argv[argc].
+
+* need to port more C libraries
+
+* extern "C include" should have the ability to re-declare a C type
+  definition with a more refined Cyclone definition.  The compiler
+  should warn if the re-declaration isn't compatiable with the C
+  definition at the representation level.  
+
+* need to be able to use inject on a single argument, not just on
+  varargs.  This is important for args that are void * for example.
+
+* add some way to forward varargs -- easiest would be to cast a vararg
+  function to one with an explicit array.
+
+* add setjmp and longjmp somehow.
+
+THINGS NEEDED TO SIMPLIFY PORTING:
+----------------------------------
+* we should start on the porting tool -- use region inference to
+  figure out the "right" interface for code.
+
+* better constant expressions (no longs?)
+
+* compound literals, more designators for arrays literals, better 
+  designators for structs
+
+* better evaluation in evexp.pop
+
+THINGS NEEDED TO MAKE REGIONS MORE REAL:
+----------------------------------------
+* finish getting unique pointers into shape.
+
+THINGS THAT WOULD BE NICE OR THAT HAVE SEX APPEAL:
+--------------------------------------------------
+* better type error messages:  it would be good to drop region information
+  when it's not germaine to the error (e.g., regions).
+
+* escaping nested functions (closures -- with RTCG approach to get
+  calling convention right.)
+
+* regular expressions
+
+* better comprehensions/iterators
+
+* We should allow more deep casts (e.g., function pointers) and have
+  generally better support for casting between compatible representations.
+  e.g., char[4] to int[1] (note not sound on architectures that require
+  word alignment.)
+
+* We should allow partial instantiations of polymorphic routines.
+
+* ought to be able to treat the arguments to a datatype constructor as a tuple
+  in a pattern...
+
+* qualifiers for arguments to [x]datatype constructors?  on tuples?
+
+* Support qualified identifier declarations (instead of just uses).
+
+* views and abstract patterns.  
+
+* string append operator (++)?  string patterns?  regexp patterns?
+
+* we should leverage the effect stuff to do exception analysis.
+
+* we should add template-like mechanisms for generating code at
+  compile (or run?) time.  That would allow us to abstract over
+  Mem types.
+
+* we should support more things as in LCLint:
+  * check that people actually look at the return code for a function?
+
+THINGS THAT WOULD MAKE THE COMPILER FASTER OR THE CODE BETTER:
+--------------------------------------------------------------
+* Try to avoid using so many lists in the abstract syntax --
+  we should use arrays (e.g., for CompoundLit_e, Array_e,
+  Struct_e, and UnresolvedMem_e, Switch_s, etc.)
+
+* We need to re-do the pattern match compilation -- we should take
+  advantage of the decision tree built during type-checking.
+
+* The code for type checking explicit format strings for printf should
+  be the same as the code for implementing printf; right now the type
+  checking code disallows some format directives that the
+  implementation supports.
+
+MISCELLANEOUS
+-------------
+* allows a cast between a "struct cons<exp>*" and "exp@?" !!!
+  at least it gives a warning...  Actually, this may be right.
+
+* better implementation of unresolved mem
+
+* translation to C with -noexpandtypedefs hasn't been tested in forever.
+
+* fix --nonullchecks to work uniformly.  This is useful for code
+  that can safely core-dump ...
