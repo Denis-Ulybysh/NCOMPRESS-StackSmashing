@@ -53,10 +53,10 @@ for attack in attacks:
 					while i < repeat_times:
 						i += 1
 
-						os.system("rm /tmp/ripe_log")
-						cmdline = "./build/ripe_attack_generator -t "+tech+" -i "+attack+" -c " + ptr + "  -l " + loc +" -f " + func + " > /tmp/ripe_log 2>&1"
+						os.system("rm /tmp/bench_log")
+						cmdline = "./build/bench_attack_generator -t "+tech+" -i "+attack+" -c " + ptr + "  -l " + loc +" -f " + func + " > /tmp/bench_log 2>&1"
 						os.system(cmdline)
-						log = open("/tmp/ripe_log","r")
+						log = open("/tmp/bench_log","r")
 		
 
 						if log.read().find("Impossible") != -1:
@@ -65,9 +65,9 @@ for attack in attacks:
 							break;	#Not possible once, not possible always :)
 
 
-						if os.path.exists("/tmp/rip-eval/f_xxxx"):
+						if os.path.exists("/bench-eval/f_xxxx"):
 							s_attempts += 1		
-							os.system("rm /tmp/rip-eval/f_xxxx")
+							os.system("rm /becnh-eval/f_xxxx")
 
 
 					if attack_possible == 0:
