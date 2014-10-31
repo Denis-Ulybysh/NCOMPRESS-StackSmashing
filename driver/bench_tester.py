@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # Developed by: Denis Ulybyshev and Servio Palacios 
 # This tool will help to test vulnerabilities 
 # Some ideas taken from: RIPE
@@ -20,7 +21,7 @@ repeatTimes = 0
 
 #Checking Arguments
 if len(sys.argv) < 2:
-	print "Usage: python "+sys.argv[0] + "[direct|indirect|both] <number of times to repeat each test>"
+	print "Usage: python "+sys.argv[0] + " [direct|indirect|both] <number of times to repeat each test>"
 	sys.exit(1)
 
 else:
@@ -35,6 +36,7 @@ else:
 i = 0
 if not os.path.exists("/bench-eval"):
 	os.system("mkdir /bench-eval");
+os.system('sysctl -w kernel.va_randomize_space=0')
 
 total_ok=0;
 total_fail=0;
