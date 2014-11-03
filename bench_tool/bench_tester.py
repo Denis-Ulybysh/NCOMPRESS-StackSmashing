@@ -1,7 +1,9 @@
 #!/usr/bin/python
 # Developed by: Denis Ulybyshev and Servio Palacios 
 # This tool will help to test vulnerabilities 
-# First draft: 2014-10-22, just skeleton
+# First draft: 2014-10-22
+# Edited: 2014.11.02
+# Crafting exploit with ncompress
 
 import os
 import sys
@@ -42,6 +44,7 @@ else:
         if not os.path.exists("./" + app_name[0] + "/bench-eval"):
                 os.system("mkdir " + app_name[0] + "/bench-eval");
 
+#Turning ASLR OFF or ON, according to input parameter
 if aslr_on == 0:
         os.system('sysctl -w kernel.randomize_va_space=0')
 else:
@@ -56,9 +59,11 @@ total_np = 0;
 i = 0
 s_attempts = 0
 attack_possible = 1
+root_directory = "./" + app_name[0] + "/"
+source_directory = root_directory + "src/"
 
 #Reading addresses file, this should be generated from buggy app
-f = open("./" + app_name[0] + "/src/addresses.txt",'r')
+f = open(source_directory + "addresses.txt",'r')
 addresses = f.read().splitlines() # will append in the list out
 system_address="" 
 shell_address=""
