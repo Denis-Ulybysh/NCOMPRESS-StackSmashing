@@ -111,7 +111,7 @@ while i < repeat_times:
                 total_ok = total_ok + 1                 						
 
 total_attacks = total_ok + total_some + total_fail + total_np;
-print "\n||Summary|| OK: ",total_ok," ,SOME: ",total_some," ,FAIL: ",total_fail," ,NP: ",total_np," ,Total Attacks: ",total_attacks
+print "\nFinal Report : SUCCESS ", total_ok," , SEGMENTATION FAULT: ",total_some," ,FAIL: ",total_fail," ,NP: ",total_np," ,Total Attacks: ",total_attacks
 
 						
 					
